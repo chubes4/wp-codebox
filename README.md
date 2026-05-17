@@ -43,8 +43,12 @@ Executed: inspect-mounted-inputs
 Collected artifacts:
 - Directory: ./artifacts/runtime-...
 - Open: file:///.../sandbox-runtime/artifacts/runtime-...
+- Manifest: ./artifacts/runtime-.../manifest.json
 - Metadata: ./artifacts/runtime-.../metadata.json
-- Logs: ./artifacts/runtime-.../logs.txt
+- Events: ./artifacts/runtime-.../events.jsonl
+- Runtime log: ./artifacts/runtime-.../logs/runtime.log
+- Commands log: ./artifacts/runtime-.../logs/commands.log
+- Mounts: ./artifacts/runtime-.../files/mounts.json
 - Observations: ./artifacts/runtime-.../observations.json
 Destroyed runtime
 ```
