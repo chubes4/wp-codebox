@@ -7,7 +7,7 @@
     "build": "tsc -b packages/runtime-core packages/runtime-playground packages/cli",
     "policy-validation-smoke": "tsx scripts/policy-validation-smoke.ts",
     "sandbox-runtime": "node packages/cli/dist/index.js",
-    "check": "npm run build && npm run policy-validation-smoke && npm run sandbox-runtime -- run --backend wordpress-playground --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command inspect-mounted-inputs --artifacts ./artifacts --json"
+    "check": "npm run build && npm run policy-validation-smoke && npm run sandbox-runtime -- run --backend wordpress-playground --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json"
   },
   "workspaces": [
     "packages/*"

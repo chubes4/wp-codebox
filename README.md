@@ -32,7 +32,8 @@ npm run build
 npm run sandbox-runtime -- run \
   --backend wordpress-playground \
   --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin \
-  --command inspect-mounted-inputs \
+  --command wordpress.run-php \
+  --arg code-file=./examples/simple-plugin/probe.php \
   --artifacts ./artifacts \
   --json
 ```
@@ -47,7 +48,7 @@ Expected output:
     "status": "destroyed"
   },
   "execution": {
-    "command": "inspect-mounted-inputs",
+    "command": "wordpress.run-php",
     "exitCode": 0
   },
   "artifacts": {
@@ -60,7 +61,9 @@ Expected output:
 }
 ```
 
-The Playground backend mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs a controlled PHP probe through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, and CI runners a stable integration seam.
+The Playground backend mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs PHP from `--arg code-file=...` through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, and CI runners a stable integration seam.
+
+`wordpress.run-php` accepts either `--arg code-file=<path>` or `--arg code=<php>`.
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
 
@@ -72,7 +75,7 @@ The fixture plugin is documented in [`examples/simple-plugin/README.md`](example
 const result = validateRuntimePolicy({
   network: "deny",
   filesystem: "readwrite-mounts",
-  commands: ["inspect-mounted-inputs"],
+  commands: ["wordpress.run-php"],
   secrets: "none",
   approvals: "never",
 })

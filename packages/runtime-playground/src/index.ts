@@ -1,4 +1,4 @@
-import { mkdir, realpath, writeFile } from "node:fs/promises"
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises"
 import { join, relative, resolve } from "node:path"
 import { assertRuntimeCommandAllowed } from "@chubes4/sandbox-runtime-core"
 import type {
@@ -297,7 +297,33 @@ class PlaygroundRuntime implements Runtime {
       return this.inspectMountedInputs()
     }
 
+    if (spec.command === "wordpress.run-php") {
+      return this.runPhp(spec)
+    }
+
     throw new Error(`No Playground command handler is registered for: ${spec.command}`)
+  }
+
+  private async runPhp(spec: ExecutionSpec): Promise<string> {
+    const server = await this.bootPlayground()
+    const code = await this.phpCodeFromArgs(spec.args ?? [])
+    const response = await server.playground.run({ code })
+
+    return response.text
+  }
+
+  private async phpCodeFromArgs(args: string[]): Promise<string> {
+    const inlineCode = argValue(args, "code")
+    if (inlineCode) {
+      return normalizePhpCode(inlineCode)
+    }
+
+    const codeFile = argValue(args, "code-file")
+    if (codeFile) {
+      return normalizePhpCode(await readFile(resolve(codeFile), "utf8"))
+    }
+
+    throw new Error("wordpress.run-php requires code=<php> or code-file=<path>")
   }
 
   private async inspectMountedInputs(): Promise<string> {
@@ -372,4 +398,14 @@ function fileEntry(path: string, kind: ArtifactManifestFile["kind"], contentType
 
 async function writeJsonLines(path: string, records: unknown[]): Promise<void> {
   await writeFile(path, records.length > 0 ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "")
+}
+
+function argValue(args: string[], name: string): string | undefined {
+  const prefix = `${name}=`
+  const match = args.find((arg) => arg.startsWith(prefix))
+  return match?.slice(prefix.length)
+}
+
+function normalizePhpCode(code: string): string {
+  return code.trimStart().startsWith("<?php") ? code : `<?php\n${code}`
 }

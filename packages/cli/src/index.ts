@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises"
-import { basename, resolve } from "node:path"
+import { resolve } from "node:path"
 import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy } from "@chubes4/sandbox-runtime-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/sandbox-runtime-playground"
 
@@ -8,6 +8,7 @@ interface RunOptions {
   backend: "wordpress-playground"
   mounts: Array<{ source: string; target: string; mode: "readonly" | "readwrite" }>
   command: string
+  args: string[]
   artifactsDirectory?: string
   policy?: RuntimePolicy
   json: boolean
@@ -29,7 +30,7 @@ interface RunOutput {
 const defaultPolicy: RuntimePolicy = {
   network: "deny",
   filesystem: "readwrite-mounts",
-  commands: ["inspect-mounted-inputs"],
+  commands: ["inspect-mounted-inputs", "wordpress.run-php"],
   secrets: "none",
   approvals: "never",
 }
@@ -88,7 +89,7 @@ async function run(options: RunOptions): Promise<RunOutput> {
       await runtime.mount({ type: "directory", source: mount.source, target: mount.target, mode: mount.mode })
     }
 
-    execution = await runtime.execute({ command: options.command })
+    execution = await runtime.execute({ command: options.command, args: options.args })
     await runtime.observe({ type: "runtime-info" })
     await runtime.observe({ type: "mounts" })
     artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true })
@@ -130,6 +131,7 @@ async function parseRunOptions(args: string[]): Promise<RunOptions> {
     backend: "wordpress-playground",
     mounts: [],
     command: "",
+    args: [],
     json: false,
   }
 
@@ -160,6 +162,9 @@ async function parseRunOptions(args: string[]): Promise<RunOptions> {
         break
       case "--command":
         options.command = value
+        break
+      case "--arg":
+        options.args.push(value)
         break
       case "--artifacts":
         options.artifactsDirectory = value
@@ -256,12 +261,13 @@ Options:
   --backend <name>     Runtime backend. Currently: wordpress-playground
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
+  --arg <key=value>    Command argument. Repeatable.
   --artifacts <dir>    Artifact root directory.
   --policy <json|file> Runtime policy JSON or path to a JSON file.
   --json               Emit machine-readable JSON.
 
 Example:
-  sandbox-runtime run --backend wordpress-playground --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command inspect-mounted-inputs --artifacts ./artifacts --json`)
+  sandbox-runtime run --backend wordpress-playground --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json`)
 }
 
 main(process.argv.slice(2)).then(
