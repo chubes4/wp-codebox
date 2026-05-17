@@ -33,14 +33,51 @@ npm run hello-runtime -- ./examples/simple-plugin
 Expected output:
 
 ```text
-Booted runtime: wordpress-playground
+Sandbox Runtime hello
+Thesis: product surfaces can create disposable WordPress sandboxes, run work there, and apply only the artifact bundle.
+WordPress inception: WordPress can safely orchestrate a WordPress Playground runtime instead of writing directly to a live site.
+
+Created runtime: wordpress-playground
 Mounted: simple-plugin
 Executed: inspect-mounted-inputs
-Collected artifacts: artifacts/run-...
+Collected artifacts:
+- Directory: ./artifacts/runtime-...
+- Open: file:///.../sandbox-runtime/artifacts/runtime-...
+- Metadata: ./artifacts/runtime-.../metadata.json
+- Logs: ./artifacts/runtime-.../logs.txt
+- Observations: ./artifacts/runtime-.../observations.json
 Destroyed runtime
 ```
 
-The current backend is a foundation stub. It validates the contract and artifact shape before wiring the real Playground runtime.
+The Playground backend mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The demo command runs a controlled PHP probe through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. The `Open` line is a clickable local artifact URL, and the file paths point to the evidence files a product UI could expose after a sandbox run.
+
+The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
+
+## v0 Runtime Policy
+
+`RuntimePolicy` is a portable declaration that every backend receives with `RuntimeCreateSpec`. The core package exposes `validateRuntimePolicy()`, `assertRuntimePolicy()`, and `assertRuntimeCommandAllowed()` so backends and control planes can validate the v0 policy shape before work starts.
+
+```ts
+const result = validateRuntimePolicy({
+  network: "deny",
+  filesystem: "readwrite-mounts",
+  commands: ["inspect-mounted-inputs"],
+  secrets: "none",
+  approvals: "never",
+})
+```
+
+Policy fields are split between **enforced now** and **declared for backend/control-plane enforcement**:
+
+| Field | v0 values | Status |
+| --- | --- | --- |
+| `commands` | string command allow-list | Enforced by `assertRuntimeCommandAllowed()`; the Playground stub rejects commands outside the list. |
+| `network` | `allow`, `deny`, `{ allowHosts }` | Validated in core; declared for real backend enforcement. |
+| `filesystem` | `sandbox`, `readonly-mounts`, `readwrite-mounts` | Validated in core; declared for mount/backend enforcement. |
+| `secrets` | `none`, `connector-scoped` | Validated in core; declared for control planes that inject credentials. |
+| `approvals` | `never`, `on-write`, `on-command` | Validated in core; declared for product/control-plane approval UX. |
+
+Disallowed commands throw `RuntimeCommandPolicyViolationError`. The error includes a stable `code`, denied `command`, `allowedCommands`, and the full `policy`, and serializes cleanly with `toJSON()` for artifact capture.
 
 ## Non-Goals
 

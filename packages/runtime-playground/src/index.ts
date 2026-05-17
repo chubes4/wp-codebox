@@ -1,10 +1,14 @@
-import { mkdir, readdir, realpath, writeFile } from "node:fs/promises"
-import { basename, join, resolve } from "node:path"
+import { mkdir, realpath, writeFile } from "node:fs/promises"
+import { join, relative, resolve } from "node:path"
+import { assertRuntimeCommandAllowed } from "@chubes4/sandbox-runtime-core"
 import type {
   ArtifactBundle,
+  ArtifactManifest,
+  ArtifactManifestFile,
   ArtifactSpec,
   ExecutionResult,
   ExecutionSpec,
+  LifecycleEvent,
   MountSpec,
   ObservationResult,
   ObservationSpec,
@@ -23,6 +27,28 @@ function id(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+interface PlaygroundRunResponse {
+  text: string
+}
+
+interface PlaygroundCliServer {
+  playground: {
+    run(options: { code: string }): Promise<PlaygroundRunResponse>
+  }
+  [Symbol.asyncDispose](): Promise<void>
+}
+
+interface PlaygroundCliModule {
+  runCLI(options: {
+    command: "server"
+    port: number
+    quiet: boolean
+    skipBrowser: boolean
+    mount: Array<{ hostPath: string; vfsPath: string }>
+    blueprint?: unknown
+  }): Promise<PlaygroundCliServer>
+}
+
 export class PlaygroundRuntimeBackend implements RuntimeBackend {
   readonly kind = "wordpress-playground" as const
 
@@ -38,7 +64,9 @@ class PlaygroundRuntime implements Runtime {
   private readonly mounts: MountSpec[] = []
   private readonly commands: ExecutionResult[] = []
   private readonly observations: ObservationResult[] = []
+  private readonly events: LifecycleEvent[] = []
   private readonly artifactRoot: string
+  private cliServerPromise?: Promise<PlaygroundCliServer>
 
   private constructor(private readonly spec: RuntimeCreateSpec) {
     this.artifactRoot = resolve(spec.artifactsDirectory ?? "artifacts", this.runtimeId)
@@ -47,6 +75,11 @@ class PlaygroundRuntime implements Runtime {
   static async create(spec: RuntimeCreateSpec): Promise<PlaygroundRuntime> {
     const runtime = new PlaygroundRuntime(spec)
     await mkdir(runtime.artifactRoot, { recursive: true })
+    runtime.recordEvent("runtime.created", {
+      backend: "wordpress-playground",
+      environment: spec.environment,
+      policy: spec.policy,
+    })
     return runtime
   }
 
@@ -65,30 +98,46 @@ class PlaygroundRuntime implements Runtime {
       throw new Error("Cannot mount into a destroyed runtime")
     }
 
-    this.mounts.push({
+    const mount = {
       ...spec,
       source: await realpath(spec.source),
-    })
+    }
+
+    this.mounts.push(mount)
+    this.recordEvent("runtime.mounted", { mount })
   }
 
   async execute(spec: ExecutionSpec): Promise<ExecutionResult> {
-    if (!this.spec.policy.commands.includes(spec.command)) {
-      throw new Error(`Command is not allowed by runtime policy: ${spec.command}`)
-    }
+    assertRuntimeCommandAllowed(spec.command, this.spec.policy)
 
     const startedAt = now()
+    const commandId = id("command")
+    this.recordEvent("runtime.command.started", {
+      id: commandId,
+      command: spec.command,
+      args: spec.args ?? [],
+      cwd: spec.cwd ?? null,
+      timeoutMs: spec.timeoutMs ?? null,
+    })
     const result: ExecutionResult = {
-      id: id("command"),
+      id: commandId,
       command: spec.command,
       args: spec.args ?? [],
       exitCode: 0,
-      stdout: await this.executeStub(spec),
+      stdout: await this.executePlaygroundCommand(spec),
       stderr: "",
       startedAt,
       finishedAt: now(),
     }
 
     this.commands.push(result)
+    this.recordEvent("runtime.command.finished", {
+      id: result.id,
+      command: result.command,
+      exitCode: result.exitCode,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+    })
     return result
   }
 
@@ -100,11 +149,15 @@ class PlaygroundRuntime implements Runtime {
     }
 
     this.observations.push(observation)
+    this.recordEvent("runtime.observed", {
+      type: observation.type,
+      observedAt: observation.observedAt,
+    })
     return observation
   }
 
   async snapshot(): Promise<Snapshot> {
-    return {
+    const snapshot = {
       id: id("snapshot"),
       createdAt: now(),
       metadata: {
@@ -112,51 +165,188 @@ class PlaygroundRuntime implements Runtime {
         mounts: this.mounts,
       },
     }
+
+    this.recordEvent("runtime.snapshot.created", {
+      id: snapshot.id,
+      createdAt: snapshot.createdAt,
+    })
+
+    return snapshot
   }
 
-  async collectArtifacts(_spec: ArtifactSpec = {}): Promise<ArtifactBundle> {
+  async collectArtifacts(spec: ArtifactSpec = {}): Promise<ArtifactBundle> {
     await mkdir(this.artifactRoot, { recursive: true })
+    const logsDirectory = join(this.artifactRoot, "logs")
+    const filesDirectory = join(this.artifactRoot, "files")
+    await mkdir(logsDirectory, { recursive: true })
+    await mkdir(filesDirectory, { recursive: true })
 
+    const bundleId = id("artifact-bundle")
+    const createdAt = now()
+    const manifestPath = join(this.artifactRoot, "manifest.json")
     const metadataPath = join(this.artifactRoot, "metadata.json")
+    const eventsPath = join(this.artifactRoot, "events.jsonl")
     const commandsPath = join(this.artifactRoot, "commands.jsonl")
-    const logsPath = join(this.artifactRoot, "logs.txt")
-    const observationsPath = join(this.artifactRoot, "observations.json")
+    const observationsPath = join(this.artifactRoot, "observations.jsonl")
+    const runtimeLogPath = join(logsDirectory, "runtime.log")
+    const commandsLogPath = join(logsDirectory, "commands.log")
+    const mountsPath = join(filesDirectory, "mounts.json")
 
+    this.recordEvent("runtime.artifacts.collected", {
+      id: bundleId,
+      directory: this.artifactRoot,
+      createdAt,
+      spec,
+    })
+
+    const runtime = await this.info()
+    const metadata = {
+      id: bundleId,
+      createdAt,
+      runtime,
+      mounts: this.mounts,
+      policy: this.spec.policy,
+      spec,
+    }
+
+    const manifestFiles: ArtifactManifestFile[] = [
+      fileEntry(manifestPath, "manifest", "application/json"),
+      fileEntry(metadataPath, "metadata", "application/json"),
+      fileEntry(eventsPath, "events", "application/x-ndjson"),
+      fileEntry(commandsPath, "commands", "application/x-ndjson"),
+      fileEntry(observationsPath, "observations", "application/x-ndjson"),
+      fileEntry(runtimeLogPath, "log", "text/plain"),
+      fileEntry(commandsLogPath, "log", "text/plain"),
+      fileEntry(mountsPath, "mounts", "application/json"),
+    ]
+
+    const manifest: ArtifactManifest = {
+      id: bundleId,
+      createdAt,
+      runtime,
+      files: manifestFiles.map((file) => ({
+        ...file,
+        path: relative(this.artifactRoot, file.path),
+      })),
+    }
+
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
     await writeFile(
       metadataPath,
-      `${JSON.stringify({ runtime: await this.info(), mounts: this.mounts, policy: this.spec.policy }, null, 2)}\n`,
+      `${JSON.stringify(metadata, null, 2)}\n`,
     )
-    await writeFile(commandsPath, this.commands.map((command) => JSON.stringify(command)).join("\n") + "\n")
-    await writeFile(logsPath, this.commands.map((command) => command.stdout).join("\n---\n") + "\n")
-    await writeFile(observationsPath, `${JSON.stringify(this.observations, null, 2)}\n`)
+    await writeJsonLines(eventsPath, this.events)
+    await writeJsonLines(commandsPath, this.commands)
+    await writeJsonLines(observationsPath, this.observations)
+    await writeFile(runtimeLogPath, this.formatRuntimeLog())
+    await writeFile(commandsLogPath, this.formatCommandsLog())
+    await writeFile(mountsPath, `${JSON.stringify(this.mounts, null, 2)}\n`)
 
     return {
-      id: id("artifact-bundle"),
+      id: bundleId,
       directory: this.artifactRoot,
+      manifestPath,
       metadataPath,
+      eventsPath,
       commandsPath,
-      logsPath,
       observationsPath,
-      createdAt: now(),
+      runtimeLogPath,
+      commandsLogPath,
+      mountsPath,
+      createdAt,
     }
   }
 
   async destroy(): Promise<void> {
+    const cliServer = await this.cliServerPromise
+    await cliServer?.[Symbol.asyncDispose]()
     this.status = "destroyed"
+    this.recordEvent("runtime.destroyed", { runtimeId: this.runtimeId })
   }
 
-  private async executeStub(spec: ExecutionSpec): Promise<string> {
-    if (spec.command === "inspect-mounted-inputs") {
-      const inspected = []
-      for (const mount of this.mounts) {
-        const entries = mount.type === "directory" ? await readdir(mount.source) : [basename(mount.source)]
-        inspected.push({ target: mount.target, source: mount.source, entries })
-      }
-
-      return JSON.stringify({ command: spec.command, mounts: inspected }, null, 2)
+  private recordEvent(type: LifecycleEvent["type"], data?: Record<string, unknown>): LifecycleEvent {
+    const event: LifecycleEvent = {
+      id: id("event"),
+      type,
+      timestamp: now(),
+      ...(data ? { data } : {}),
     }
 
-    return JSON.stringify({ command: spec.command, args: spec.args ?? [], note: "stub execution" }, null, 2)
+    this.events.push(event)
+    return event
+  }
+
+  private formatRuntimeLog(): string {
+    return this.events.map((event) => `[${event.timestamp}] ${event.type} ${JSON.stringify(event.data ?? {})}`).join("\n") + "\n"
+  }
+
+  private formatCommandsLog(): string {
+    return (
+      this.commands
+        .map((command) => {
+          const header = `[${command.startedAt}] ${command.command} ${command.args.join(" ")}`.trim()
+          const output = [command.stdout, command.stderr].filter(Boolean).join("\n")
+          return `${header}\nexitCode=${command.exitCode}\n${output}`
+        })
+        .join("\n---\n") + "\n"
+    )
+  }
+
+  private async executePlaygroundCommand(spec: ExecutionSpec): Promise<string> {
+    if (spec.command === "inspect-mounted-inputs") {
+      return this.inspectMountedInputs()
+    }
+
+    throw new Error(`No Playground command handler is registered for: ${spec.command}`)
+  }
+
+  private async inspectMountedInputs(): Promise<string> {
+    const server = await this.bootPlayground()
+    const response = await server.playground.run({
+      code: `<?php
+$mounts = ${JSON.stringify(JSON.stringify(this.mounts))};
+$inspected = array_map(function ($mount) {
+    $target = $mount['target'];
+    $entries = is_dir($target) ? array_values(array_diff(scandir($target), array('.', '..'))) : array(basename($target));
+    sort($entries);
+
+    return array(
+        'target' => $target,
+        'source' => $mount['source'],
+        'entries' => $entries,
+        'exists' => file_exists($target),
+    );
+}, json_decode($mounts, true));
+
+echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspected), JSON_PRETTY_PRINT);
+`,
+    })
+
+    return response.text
+  }
+
+  private async bootPlayground(): Promise<PlaygroundCliServer> {
+    if (!this.cliServerPromise) {
+      this.cliServerPromise = this.startPlayground()
+    }
+
+    return this.cliServerPromise
+  }
+
+  private async startPlayground(): Promise<PlaygroundCliServer> {
+    const { runCLI } = (await import("@wp-playground/cli")) as unknown as PlaygroundCliModule
+
+    return runCLI({
+      command: "server",
+      port: 0,
+      quiet: true,
+      skipBrowser: true,
+      mount: this.mounts.map((mount) => ({
+        hostPath: mount.source,
+        vfsPath: mount.target,
+      })),
+      blueprint: this.spec.environment.blueprint,
+    })
   }
 
   private async observeStub(spec: ObservationSpec): Promise<unknown> {
@@ -174,4 +364,12 @@ class PlaygroundRuntime implements Runtime {
 
 export function createPlaygroundRuntimeBackend(): RuntimeBackend {
   return new PlaygroundRuntimeBackend()
+}
+
+function fileEntry(path: string, kind: ArtifactManifestFile["kind"], contentType: string): ArtifactManifestFile {
+  return { path, kind, contentType }
+}
+
+async function writeJsonLines(path: string, records: unknown[]): Promise<void> {
+  await writeFile(path, records.length > 0 ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : "")
 }
