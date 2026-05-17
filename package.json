@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b packages/runtime-core packages/runtime-playground",
-    "hello-runtime": "tsx scripts/hello-runtime.ts",
+    "build": "tsc -b packages/runtime-core packages/runtime-playground packages/cli",
     "policy-validation-smoke": "tsx scripts/policy-validation-smoke.ts",
-    "check": "npm run build && npm run policy-validation-smoke && npm run hello-runtime -- ./examples/simple-plugin"
+    "sandbox-runtime": "node packages/cli/dist/index.js",
+    "check": "npm run build && npm run policy-validation-smoke && npm run sandbox-runtime -- run --backend wordpress-playground --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command inspect-mounted-inputs --artifacts ./artifacts --json"
   },
   "workspaces": [
     "packages/*"

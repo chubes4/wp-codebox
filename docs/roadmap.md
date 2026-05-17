@@ -24,7 +24,7 @@ Sandbox Runtime turns that repeated pattern into a stable application surface.
 - Keep the core package backend-agnostic.
 - Ship a Playground-shaped backend stub.
 - Produce a structured artifact bundle.
-- Keep the demo independent from Studio, Data Machine, Homeboy, Codex, and Agents API.
+- Keep the CLI independent from Studio, Data Machine, Homeboy, Codex, and Agents API.
 
 ### Phase 2: Real Playground Backend
 

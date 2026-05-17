@@ -22,38 +22,45 @@ For WordPress, this means a control plane such as Studio, Data Machine, or WordP
 
 - `@chubes4/sandbox-runtime-core`: backend-agnostic runtime interfaces and shared types.
 - `@chubes4/sandbox-runtime-playground`: first backend adapter shaped around WordPress Playground.
+- `@chubes4/sandbox-runtime-cli`: `sandbox-runtime` command for external consumers.
 
-## v0 Demo
+## CLI
 
 ```bash
 npm install
-npm run hello-runtime -- ./examples/simple-plugin
+npm run build
+npm run sandbox-runtime -- run \
+  --backend wordpress-playground \
+  --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin \
+  --command inspect-mounted-inputs \
+  --artifacts ./artifacts \
+  --json
 ```
 
 Expected output:
 
-```text
-Sandbox Runtime hello
-Thesis: product surfaces can create disposable WordPress sandboxes, run work there, and apply only the artifact bundle.
-WordPress inception: WordPress can safely orchestrate a WordPress Playground runtime instead of writing directly to a live site.
-
-Created runtime: wordpress-playground
-Mounted: simple-plugin
-Executed: inspect-mounted-inputs
-Collected artifacts:
-- Directory: ./artifacts/runtime-...
-- Open: file:///.../sandbox-runtime/artifacts/runtime-...
-- Manifest: ./artifacts/runtime-.../manifest.json
-- Metadata: ./artifacts/runtime-.../metadata.json
-- Events: ./artifacts/runtime-.../events.jsonl
-- Runtime log: ./artifacts/runtime-.../logs/runtime.log
-- Commands log: ./artifacts/runtime-.../logs/commands.log
-- Mounts: ./artifacts/runtime-.../files/mounts.json
-- Observations: ./artifacts/runtime-.../observations.json
-Destroyed runtime
+```json
+{
+  "success": true,
+  "runtime": {
+    "backend": "wordpress-playground",
+    "status": "destroyed"
+  },
+  "execution": {
+    "command": "inspect-mounted-inputs",
+    "exitCode": 0
+  },
+  "artifacts": {
+    "directory": "./artifacts/runtime-...",
+    "manifestPath": "./artifacts/runtime-.../manifest.json",
+    "eventsPath": "./artifacts/runtime-.../events.jsonl",
+    "commandsPath": "./artifacts/runtime-.../commands.jsonl",
+    "observationsPath": "./artifacts/runtime-.../observations.jsonl"
+  }
+}
 ```
 
-The Playground backend mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The demo command runs a controlled PHP probe through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. The `Open` line is a clickable local artifact URL, and the file paths point to the evidence files a product UI could expose after a sandbox run.
+The Playground backend mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs a controlled PHP probe through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, and CI runners a stable integration seam.
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
 
