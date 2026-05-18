@@ -228,13 +228,13 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, callbac
 
 function agentRuntimeMounts(options: AgentRuntimeProbeOptions): RunOptions["mounts"] {
   return [
-    { source: resolve(options.agentsApiPath), target: "/wordpress/wp-content/plugins/agents-api", mode: "readwrite" },
-    { source: resolve(options.dataMachinePath), target: "/wordpress/wp-content/plugins/data-machine", mode: "readwrite" },
-    { source: resolve(options.dataMachineCodePath), target: "/wordpress/wp-content/plugins/data-machine-code", mode: "readwrite" },
+    { source: resolve(options.agentsApiPath), target: "/wordpress/wp-content/plugins/agents-api", mode: "readonly" },
+    { source: resolve(options.dataMachinePath), target: "/wordpress/wp-content/plugins/data-machine", mode: "readonly" },
+    { source: resolve(options.dataMachineCodePath), target: "/wordpress/wp-content/plugins/data-machine-code", mode: "readonly" },
     ...providerPluginMounts(options).map((plugin) => ({
       source: plugin.source,
       target: `/wordpress/wp-content/plugins/${plugin.slug}`,
-      mode: "readwrite" as const,
+      mode: "readonly" as const,
     })),
     ...options.mounts,
   ]
