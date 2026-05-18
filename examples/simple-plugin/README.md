@@ -1,6 +1,6 @@
 # Simple Plugin Fixture
 
-Tiny WordPress plugin fixture for `sandbox-runtime run`.
+Tiny WordPress plugin fixture for `wp-codebox run`.
 
 The demo mounts this directory into a disposable WordPress Playground-shaped runtime at:
 
@@ -11,7 +11,7 @@ The demo mounts this directory into a disposable WordPress Playground-shaped run
 Use it to verify the v0 runtime contract:
 
 ```bash
-npm run sandbox-runtime -- run \
+npm run wp-codebox -- run \
   --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin \
   --command wordpress.run-php \
   --arg code-file=./examples/simple-plugin/probe.php \

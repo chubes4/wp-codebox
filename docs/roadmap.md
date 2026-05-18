@@ -1,8 +1,8 @@
-# Sandbox Runtime Roadmap
+# WP Codebox Roadmap
 
 ## North Star
 
-Sandbox Runtime is a portable TypeScript substrate for real-time, isolated application environments. It lets products create sandboxes, mount inputs, execute controlled actions, observe state, and collect artifacts.
+WP Codebox is a portable TypeScript substrate for real-time, isolated application environments. It lets products create sandboxes, mount inputs, execute controlled actions, observe state, and collect artifacts.
 
 The first backend is WordPress Playground. The first flagship workload is sandboxed WordPress coding agents.
 
@@ -14,7 +14,7 @@ Homeboy, world-of-wordpress, wp-site-generator, wp-gym, and Data Machine Code ha
 isolated environment + controlled execution + evidence bundle
 ```
 
-Sandbox Runtime turns that repeated pattern into a stable application surface.
+WP Codebox turns that repeated pattern into a stable application surface.
 
 ## Phases
 
@@ -40,9 +40,9 @@ Sandbox Runtime turns that repeated pattern into a stable application surface.
 
 ### Phase 4: WordPress Control Plane Adapter
 
-- Let Data Machine call Sandbox Runtime from WordPress.
+- Let Data Machine call WP Codebox from WordPress.
 - Map Data Machine jobs, approvals, agents, and auth refs onto runtime tasks.
-- Keep Sandbox Runtime standalone; the WordPress integration is an adapter.
+- Keep WP Codebox standalone; the WordPress integration is an adapter.
 
 ### Phase 5: Agent Actors
 
@@ -53,7 +53,7 @@ Sandbox Runtime turns that repeated pattern into a stable application surface.
 ### Phase 6: Studio / Product Spike
 
 - Identify one Studio path that can consume the runtime contract.
-- Replace one PI-harness-shaped path with Sandbox Runtime for a focused demo.
+- Replace one PI-harness-shaped path with WP Codebox for a focused demo.
 - Show create, observe, artifact, and apply/discard UX.
 
 ## Boundaries
@@ -62,4 +62,4 @@ Sandbox Runtime turns that repeated pattern into a stable application surface.
 - Agents API owns agent identity, sessions, tool loops, and events.
 - WP AI Client owns direct model calls.
 - Connectors/Data Machine auth own provider/runtime credentials.
-- Sandbox Runtime owns isolated environments and artifacts.
+- WP Codebox owns isolated environments and artifacts.

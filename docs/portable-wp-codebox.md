@@ -1,4 +1,4 @@
-# Portable Sandbox Runtime With WordPress Playground Backend
+# Portable WP Codebox With WordPress Playground Backend
 
 ## Problem
 
@@ -20,7 +20,7 @@ WordPress Playground is the first backend because it provides a cheap, portable,
 - **Agents API** owns agent identity, sessions, tools, and run loops.
 - **WP AI Client** owns model/provider prompt execution.
 - **Connectors API** owns external service auth and credential configuration.
-- **Sandbox Runtime** owns isolated environments, mounts, execution policy, observations, snapshots, and artifacts.
+- **WP Codebox** owns isolated environments, mounts, execution policy, observations, snapshots, and artifacts.
 
 ## First Milestone
 

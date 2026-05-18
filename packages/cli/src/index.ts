@@ -2,8 +2,8 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
-import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy } from "@chubes4/sandbox-runtime-core"
-import { createPlaygroundRuntimeBackend } from "@chubes4/sandbox-runtime-playground"
+import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy } from "@chubes4/wp-codebox-core"
+import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
 interface RunOptions {
   mounts: Array<{ source: string; target: string; mode: "readonly" | "readwrite" }>
@@ -66,7 +66,7 @@ interface AgentSandboxBatchOptions extends AgentRuntimeProbeOptions {
 
 interface AgentSandboxBatchOutput {
   success: boolean
-  schema: "sandbox-runtime/agent-sandbox-batch/v1"
+  schema: "wp-codebox/agent-sandbox-batch/v1"
   concurrency: number
   total: number
   completed: number
@@ -204,7 +204,7 @@ async function runAgentSandboxBatch(options: AgentSandboxBatchOptions): Promise<
 
   return {
     success: failed === 0,
-    schema: "sandbox-runtime/agent-sandbox-batch/v1",
+    schema: "wp-codebox/agent-sandbox-batch/v1",
     concurrency,
     total: runs.length,
     completed: runs.length - failed,
@@ -486,8 +486,8 @@ async function resolveCodexAuthEnv(options: AgentRuntimeProbeOptions): Promise<R
   const active = await refreshOpenCodeOpenAIAuthIfNeeded(auth)
 
   return {
-    SANDBOX_RUNTIME_CODEX_ACCESS_TOKEN: active.access,
-    ...(active.accountId ? { SANDBOX_RUNTIME_CODEX_ACCOUNT_ID: active.accountId } : {}),
+    WP_CODEBOX_CODEX_ACCESS_TOKEN: active.access,
+    ...(active.accountId ? { WP_CODEBOX_CODEX_ACCOUNT_ID: active.accountId } : {}),
   }
 }
 
@@ -568,7 +568,7 @@ async function run(options: RunOptions): Promise<RunOutput> {
         backend: "wordpress-playground",
         environment: {
           kind: "wordpress",
-          name: "sandbox-runtime-cli",
+          name: "wp-codebox-cli",
           version: options.wpVersion ?? "latest",
           blueprint: { steps: [] },
         },
@@ -733,18 +733,18 @@ function serializeError(error: unknown): RunOutput["error"] {
 
 function printHumanOutput(output: RunOutput): void {
   if (!output.success) {
-    console.error(output.error?.message ?? "Sandbox Runtime failed")
+    console.error(output.error?.message ?? "WP Codebox failed")
     return
   }
 
-  console.log("Sandbox Runtime run")
+  console.log("WP Codebox run")
   console.log(`Runtime: ${output.runtime?.backend ?? "unknown"}`)
   console.log(`Executed: ${output.execution?.command ?? "unknown"}`)
   console.log(`Artifacts: ${output.artifacts?.directory ?? "none"}`)
 }
 
 function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
-  console.log("Sandbox Runtime batch")
+  console.log("WP Codebox batch")
   console.log(`Runs: ${output.completed}/${output.total} completed`)
   console.log(`Concurrency: ${output.concurrency}`)
   for (const run of output.runs) {
@@ -757,10 +757,10 @@ function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
 
 function printHelp(): void {
   console.log(`Usage:
-  sandbox-runtime run --mount <host>:<vfs> --command <id> [options]
-  sandbox-runtime agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> [options]
-  sandbox-runtime agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [options]
-  sandbox-runtime agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [--task <text> ...] [options]
+  wp-codebox run --mount <host>:<vfs> --command <id> [options]
+  wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> [options]
+  wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [options]
+  wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [--task <text> ...] [options]
 
 Options:
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
@@ -799,7 +799,7 @@ Agent sandbox batch options:
   --concurrency <n>           Maximum concurrent sandboxes. Defaults to 2.
 
 Example:
-  sandbox-runtime run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json`)
+  wp-codebox run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json`)
 }
 
 async function resolveSandboxTaskCode(options: AgentSandboxRunOptions): Promise<string> {
@@ -828,8 +828,8 @@ function agentChatTaskCode(options: AgentSandboxRunOptions): string {
     mode,
     client_context: {
       source: "bridge",
-      client_name: "sandbox-runtime",
-      connector_id: "sandbox-runtime-cli",
+      client_name: "wp-codebox",
+      connector_id: "wp-codebox-cli",
       mode,
       agent_modes: [mode],
     },
@@ -946,12 +946,12 @@ function codexTransporterPhp(): string {
   return `
 if (class_exists('\\WordPress\\AiClient\\AiClient') && interface_exists('\\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface')) {
     $sandbox_codex_registry = \\WordPress\\AiClient\\AiClient::defaultRegistry();
-    $sandbox_codex_access_token = getenv('SANDBOX_RUNTIME_CODEX_ACCESS_TOKEN');
-    $sandbox_codex_account_id = getenv('SANDBOX_RUNTIME_CODEX_ACCOUNT_ID');
+    $sandbox_codex_access_token = getenv('WP_CODEBOX_CODEX_ACCESS_TOKEN');
+    $sandbox_codex_account_id = getenv('WP_CODEBOX_CODEX_ACCOUNT_ID');
     if (is_string($sandbox_codex_access_token) && '' !== $sandbox_codex_access_token) {
-        update_option('connectors_ai_openai_api_key', 'sandbox-runtime-codex-dummy-key');
-        if (!class_exists('Sandbox_Runtime_Codex_Transporter')) {
-            class Sandbox_Runtime_Codex_Transporter implements \\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface {
+        update_option('connectors_ai_openai_api_key', 'wp-codebox-codex-dummy-key');
+        if (!class_exists('WP_Codebox_Codex_Transporter')) {
+            class WP_Codebox_Codex_Transporter implements \\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface {
                 public function __construct(private \\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface $inner, private string $access_token, private string $account_id = '') {}
 
                 public function send(\\WordPress\\AiClient\\Providers\\Http\\DTO\\Request $request, ?\\WordPress\\AiClient\\Providers\\Http\\DTO\\RequestOptions $options = null): \\WordPress\\AiClient\\Providers\\Http\\DTO\\Response {
@@ -985,9 +985,9 @@ if (class_exists('\\WordPress\\AiClient\\AiClient') && interface_exists('\\WordP
                         if ('' !== $this->account_id) {
                             $headers['ChatGPT-Account-Id'] = array($this->account_id);
                         }
-                        $headers['originator'] = array('sandbox-runtime');
-                        $headers['User-Agent'] = array('sandbox-runtime codex-opencode');
-                        $headers['session_id'] = array('sandbox-runtime');
+                        $headers['originator'] = array('wp-codebox');
+                        $headers['User-Agent'] = array('wp-codebox codex-opencode');
+                        $headers['session_id'] = array('wp-codebox');
 
                         $body = json_decode((string) $request->getBody(), true);
                         if (!is_array($body)) {
@@ -1065,7 +1065,7 @@ if (class_exists('\\WordPress\\AiClient\\AiClient') && interface_exists('\\WordP
             }
         }
 
-        $sandbox_codex_registry->setHttpTransporter(new Sandbox_Runtime_Codex_Transporter($sandbox_codex_registry->getHttpTransporter(), $sandbox_codex_access_token, is_string($sandbox_codex_account_id) ? $sandbox_codex_account_id : ''));
+        $sandbox_codex_registry->setHttpTransporter(new WP_Codebox_Codex_Transporter($sandbox_codex_registry->getHttpTransporter(), $sandbox_codex_access_token, is_string($sandbox_codex_account_id) ? $sandbox_codex_account_id : ''));
     }
 }
 `

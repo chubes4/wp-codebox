@@ -1,16 +1,16 @@
 <?php
 /**
- * Host-side Sandbox Runtime agent sandbox runner.
+ * Host-side WP Codebox agent sandbox runner.
  *
- * @package SandboxRuntime
+ * @package WPCodebox
  */
 
 defined( 'ABSPATH' ) || exit;
 
-final class Sandbox_Runtime_Agent_Sandbox_Runner {
+final class WP_Codebox_Agent_Sandbox_Runner {
 
-	private const SCHEMA = 'sandbox-runtime/agent-task-run/v1';
-	private const BATCH_SCHEMA = 'sandbox-runtime/agent-task-batch/v1';
+	private const SCHEMA = 'wp-codebox/agent-task-run/v1';
+	private const BATCH_SCHEMA = 'wp-codebox/agent-task-batch/v1';
 
 	/** @var array<string, callable> */
 	private array $callbacks;
@@ -23,19 +23,19 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 	}
 
 	/**
-	 * Run a task inside an isolated Sandbox Runtime agent sandbox.
+	 * Run a task inside an isolated WP Codebox agent sandbox.
 	 *
 	 * @param array<string,mixed> $input Ability input.
 	 * @return array<string,mixed>|WP_Error
 	 */
 	public function run( array $input ): array|WP_Error {
 		if ( ! $this->shell_available() ) {
-			return new WP_Error( 'sandbox_runtime_shell_unavailable', 'Shell execution is not available for Sandbox Runtime.', array( 'status' => 500 ) );
+			return new WP_Error( 'wp_codebox_shell_unavailable', 'Shell execution is not available for WP Codebox.', array( 'status' => 500 ) );
 		}
 
 		$task = trim( (string) ( $input['task'] ?? '' ) );
 		if ( '' === $task ) {
-			return new WP_Error( 'sandbox_runtime_task_missing', 'task is required.', array( 'status' => 400 ) );
+			return new WP_Error( 'wp_codebox_task_missing', 'task is required.', array( 'status' => 400 ) );
 		}
 
 		$paths = $this->resolve_component_paths( $input );
@@ -46,7 +46,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		$code      = trim( (string) ( $input['code'] ?? '' ) );
 		$code_file = $this->clean_path( (string) ( $input['code_file'] ?? '' ) );
 		if ( '' !== $code && '' !== $code_file ) {
-			return new WP_Error( 'sandbox_runtime_code_conflict', 'Use either code or code_file, not both.', array( 'status' => 400 ) );
+			return new WP_Error( 'wp_codebox_code_conflict', 'Use either code or code_file, not both.', array( 'status' => 400 ) );
 		}
 
 		$artifacts = $this->clean_path( (string) ( $input['artifacts_path'] ?? $this->default_artifacts_path() ) );
@@ -55,9 +55,9 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			$wp_version = 'trunk';
 		}
 
-		$bin = trim( (string) ( $input['sandbox_runtime_bin'] ?? $this->default_bin() ) );
+		$bin = trim( (string) ( $input['wp_codebox_bin'] ?? $this->default_bin() ) );
 		if ( '' === $bin || ! preg_match( '#^[A-Za-z0-9_./:@+-]+$#', $bin ) ) {
-			return new WP_Error( 'sandbox_runtime_bin_invalid', 'sandbox_runtime_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
+			return new WP_Error( 'wp_codebox_bin_invalid', 'wp_codebox_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
 		}
 
 		$command = sprintf(
@@ -107,8 +107,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( is_wp_error( $decoded ) ) {
 			return new WP_Error(
-				'sandbox_runtime_json_invalid',
-				'Sandbox Runtime did not return valid JSON: ' . $decoded->get_error_message(),
+				'wp_codebox_json_invalid',
+				'WP Codebox did not return valid JSON: ' . $decoded->get_error_message(),
 				array(
 					'status'    => 500,
 					'exit_code' => $exit_code,
@@ -119,8 +119,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( 0 !== $exit_code ) {
 			return new WP_Error(
-				'sandbox_runtime_run_failed',
-				'Sandbox Runtime agent sandbox run failed.',
+				'wp_codebox_run_failed',
+				'WP Codebox agent sandbox run failed.',
 				array(
 					'status'    => 500,
 					'exit_code' => $exit_code,
@@ -143,19 +143,19 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 	}
 
 	/**
-	 * Run multiple tasks, each in its own isolated Sandbox Runtime agent sandbox.
+	 * Run multiple tasks, each in its own isolated WP Codebox agent sandbox.
 	 *
 	 * @param array<string,mixed> $input Ability input.
 	 * @return array<string,mixed>|WP_Error
 	 */
 	public function run_batch( array $input ): array|WP_Error {
 		if ( ! $this->shell_available() ) {
-			return new WP_Error( 'sandbox_runtime_shell_unavailable', 'Shell execution is not available for Sandbox Runtime.', array( 'status' => 500 ) );
+			return new WP_Error( 'wp_codebox_shell_unavailable', 'Shell execution is not available for WP Codebox.', array( 'status' => 500 ) );
 		}
 
 		$tasks = $this->tasks( $input );
 		if ( empty( $tasks ) ) {
-			return new WP_Error( 'sandbox_runtime_tasks_missing', 'tasks must include at least one task.', array( 'status' => 400 ) );
+			return new WP_Error( 'wp_codebox_tasks_missing', 'tasks must include at least one task.', array( 'status' => 400 ) );
 		}
 
 		$paths = $this->resolve_component_paths( $input );
@@ -169,9 +169,9 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			$wp_version = 'trunk';
 		}
 
-		$bin = trim( (string) ( $input['sandbox_runtime_bin'] ?? $this->default_bin() ) );
+		$bin = trim( (string) ( $input['wp_codebox_bin'] ?? $this->default_bin() ) );
 		if ( '' === $bin || ! preg_match( '#^[A-Za-z0-9_./:@+-]+$#', $bin ) ) {
-			return new WP_Error( 'sandbox_runtime_bin_invalid', 'sandbox_runtime_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
+			return new WP_Error( 'wp_codebox_bin_invalid', 'wp_codebox_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
 		}
 
 		$concurrency = max( 1, (int) ( $input['concurrency'] ?? 2 ) );
@@ -214,8 +214,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( is_wp_error( $decoded ) ) {
 			return new WP_Error(
-				'sandbox_runtime_json_invalid',
-				'Sandbox Runtime did not return valid JSON: ' . $decoded->get_error_message(),
+				'wp_codebox_json_invalid',
+				'WP Codebox did not return valid JSON: ' . $decoded->get_error_message(),
 				array(
 					'status'    => 500,
 					'exit_code' => $exit_code,
@@ -226,8 +226,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( 0 !== $exit_code ) {
 			return new WP_Error(
-				'sandbox_runtime_batch_failed',
-				'Sandbox Runtime agent sandbox batch failed.',
+				'wp_codebox_batch_failed',
+				'WP Codebox agent sandbox batch failed.',
 				array(
 					'status'    => 500,
 					'exit_code' => $exit_code,
@@ -265,7 +265,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		foreach ( $paths as $key => $path ) {
 			if ( '' === $path || ! is_dir( $path ) ) {
-				return new WP_Error( 'sandbox_runtime_component_path_missing', sprintf( 'Sandbox Runtime component path %s is missing or not a directory.', $key ), array( 'status' => 400 ) );
+				return new WP_Error( 'wp_codebox_component_path_missing', sprintf( 'WP Codebox component path %s is missing or not a directory.', $key ), array( 'status' => 400 ) );
 			}
 		}
 
@@ -276,14 +276,14 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 	private function configured_paths(): array {
 		$paths = array();
 		if ( function_exists( 'get_option' ) ) {
-			$option = get_option( 'sandbox_runtime_component_paths', array() );
+			$option = get_option( 'wp_codebox_component_paths', array() );
 			if ( is_array( $option ) ) {
 				$paths = $option;
 			}
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$paths = apply_filters( 'sandbox_runtime_component_paths', $paths );
+			$paths = apply_filters( 'wp_codebox_component_paths', $paths );
 		}
 
 		return is_array( $paths ) ? $paths : array();
@@ -304,7 +304,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$agent = (string) apply_filters( 'sandbox_runtime_default_agent', '' );
+			$agent = (string) apply_filters( 'wp_codebox_default_agent', '' );
 		}
 
 		return '' !== trim( $agent ) ? trim( $agent ) : 'sandbox-agent';
@@ -323,7 +323,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$provider = (string) apply_filters( 'sandbox_runtime_default_provider', '' );
+			$provider = (string) apply_filters( 'wp_codebox_default_provider', '' );
 		}
 
 		return trim( $provider );
@@ -336,7 +336,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$model = (string) apply_filters( 'sandbox_runtime_default_model', '' );
+			$model = (string) apply_filters( 'wp_codebox_default_model', '' );
 		}
 
 		return trim( $model );
@@ -349,7 +349,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$codex_auth = (string) apply_filters( 'sandbox_runtime_default_codex_auth', '' );
+			$codex_auth = (string) apply_filters( 'wp_codebox_default_codex_auth', '' );
 		}
 
 		return trim( $codex_auth );
@@ -359,7 +359,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 	private function secret_env_names( array $input ): array {
 		$names = is_array( $input['secret_env'] ?? null ) ? $input['secret_env'] : array();
 		if ( empty( $names ) && function_exists( 'apply_filters' ) ) {
-			$names = apply_filters( 'sandbox_runtime_default_secret_env', array() );
+			$names = apply_filters( 'wp_codebox_default_secret_env', array() );
 		}
 
 		if ( ! is_array( $names ) ) {
@@ -398,17 +398,17 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		$base = function_exists( 'wp_upload_dir' ) ? wp_upload_dir() : array( 'basedir' => sys_get_temp_dir() );
 		$root = is_array( $base ) && ! empty( $base['basedir'] ) ? (string) $base['basedir'] : sys_get_temp_dir();
 
-		return rtrim( $root, DIRECTORY_SEPARATOR ) . DIRECTORY_SEPARATOR . 'sandbox-runtime' . DIRECTORY_SEPARATOR . $this->generate_run_id();
+		return rtrim( $root, DIRECTORY_SEPARATOR ) . DIRECTORY_SEPARATOR . 'wp-codebox' . DIRECTORY_SEPARATOR . $this->generate_run_id();
 	}
 
 	private function default_bin(): string {
-		$bin = 'sandbox-runtime';
+		$bin = 'wp-codebox';
 		if ( function_exists( 'get_option' ) ) {
-			$bin = (string) get_option( 'sandbox_runtime_bin', $bin );
+			$bin = (string) get_option( 'wp_codebox_bin', $bin );
 		}
 
 		if ( function_exists( 'apply_filters' ) ) {
-			$bin = (string) apply_filters( 'sandbox_runtime_bin', $bin );
+			$bin = (string) apply_filters( 'wp_codebox_bin', $bin );
 		}
 
 		return $bin;
@@ -465,7 +465,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		$output = array();
 		$exit   = 0;
-		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Required host-side Sandbox Runtime execution primitive.
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Required host-side WP Codebox execution primitive.
 		exec( $command . ' 2>&1', $output, $exit );
 
 		return array(

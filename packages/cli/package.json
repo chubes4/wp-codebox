@@ -1,9 +1,9 @@
 {
-  "name": "@chubes4/sandbox-runtime-cli",
+  "name": "@chubes4/wp-codebox-cli",
   "version": "0.0.0",
   "type": "module",
   "bin": {
-    "sandbox-runtime": "dist/index.js"
+    "wp-codebox": "dist/index.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@chubes4/sandbox-runtime-core": "file:../runtime-core",
-    "@chubes4/sandbox-runtime-playground": "file:../runtime-playground"
+    "@chubes4/wp-codebox-core": "file:../runtime-core",
+    "@chubes4/wp-codebox-playground": "file:../runtime-playground"
   }
 }

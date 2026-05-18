@@ -1,6 +1,6 @@
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises"
 import { join, relative, resolve } from "node:path"
-import { assertRuntimeCommandAllowed } from "@chubes4/sandbox-runtime-core"
+import { assertRuntimeCommandAllowed } from "@chubes4/wp-codebox-core"
 import type {
   ArtifactBundle,
   ArtifactManifest,
@@ -17,7 +17,7 @@ import type {
   RuntimeCreateSpec,
   RuntimeInfo,
   Snapshot,
-} from "@chubes4/sandbox-runtime-core"
+} from "@chubes4/wp-codebox-core"
 
 function now(): string {
   return new Date().toISOString()

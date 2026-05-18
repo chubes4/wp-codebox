@@ -1,6 +1,6 @@
 <?php
 /**
- * Pure-PHP smoke for the Sandbox Runtime WordPress plugin ability surface.
+ * Pure-PHP smoke for the WP Codebox WordPress plugin ability surface.
  *
  * Run: php tests/smoke-wordpress-plugin.php
  */
@@ -8,7 +8,7 @@
 declare( strict_types=1 );
 
 if ( ! defined( 'ABSPATH' ) ) {
-	define( 'ABSPATH', sys_get_temp_dir() . '/sandbox-runtime-wordpress-plugin/' );
+	define( 'ABSPATH', sys_get_temp_dir() . '/wp-codebox-wordpress-plugin/' );
 }
 
 if ( ! class_exists( 'WP_Ability' ) ) {
@@ -28,27 +28,27 @@ if ( ! function_exists( 'is_wp_error' ) ) {
 	function is_wp_error( $thing ): bool { return $thing instanceof WP_Error; }
 }
 
-$GLOBALS['sandbox_runtime_registered_abilities'] = array();
-$GLOBALS['sandbox_runtime_filters']              = array();
+$GLOBALS['wp_codebox_registered_abilities'] = array();
+$GLOBALS['wp_codebox_filters']              = array();
 
 function wp_register_ability( string $name, array $definition ): void {
-	$GLOBALS['sandbox_runtime_registered_abilities'][ $name ] = $definition;
+	$GLOBALS['wp_codebox_registered_abilities'][ $name ] = $definition;
 }
 
 function doing_action( string $hook ): bool { return 'wp_abilities_api_init' === $hook; }
 function add_action( string $hook, callable $callback, int $priority = 10 ): void {}
 function current_user_can( string $capability ): bool { return 'manage_options' === $capability; }
-function apply_filters( string $hook, mixed $value ): mixed { return $GLOBALS['sandbox_runtime_filters'][ $hook ] ?? $value; }
+function apply_filters( string $hook, mixed $value ): mixed { return $GLOBALS['wp_codebox_filters'][ $hook ] ?? $value; }
 function get_option( string $name, mixed $default = null ): mixed { return $default; }
 
-require __DIR__ . '/../packages/wordpress-plugin/src/class-sandbox-runtime-agent-sandbox-runner.php';
-require __DIR__ . '/../packages/wordpress-plugin/src/class-sandbox-runtime-abilities.php';
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sandbox-runner.php';
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-abilities.php';
 
-$root = sys_get_temp_dir() . '/sandbox-runtime-wordpress-plugin-' . getmypid();
+$root = sys_get_temp_dir() . '/wp-codebox-wordpress-plugin-' . getmypid();
 foreach ( array( 'agents-api', 'data-machine', 'data-machine-code', 'ai-provider-for-openai', 'artifacts' ) as $dir ) {
 	mkdir( $root . '/' . $dir, 0777, true );
 }
-file_put_contents( $root . '/sandbox-runtime.js', "#!/usr/bin/env node\n" );
+file_put_contents( $root . '/wp-codebox.js', "#!/usr/bin/env node\n" );
 
 $failures = array();
 $total    = 0;
@@ -63,36 +63,36 @@ $assert   = function ( string $label, bool $condition ) use ( &$failures, &$tota
 	echo "  fail {$label}\n";
 };
 
-echo "Sandbox Runtime WordPress plugin - smoke\n";
+echo "WP Codebox WordPress plugin - smoke\n";
 
-new Sandbox_Runtime_Abilities();
+new WP_Codebox_Abilities();
 
-$ability = $GLOBALS['sandbox_runtime_registered_abilities']['sandbox-runtime/run-agent-task'] ?? null;
+$ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task'] ?? null;
 $assert( 'run-agent-task ability registered', is_array( $ability ) );
 $assert( 'ability is REST visible', true === ( $ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'ability requires task only', array( 'task' ) === ( $ability['input_schema']['required'] ?? array() ) );
 $assert( 'permission defaults to manage_options', true === call_user_func( $ability['permission_callback'] ) );
 
-$batch_ability = $GLOBALS['sandbox_runtime_registered_abilities']['sandbox-runtime/run-agent-task-batch'] ?? null;
+$batch_ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task-batch'] ?? null;
 $assert( 'run-agent-task-batch ability registered', is_array( $batch_ability ) );
 $assert( 'batch ability is REST visible', true === ( $batch_ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'batch ability requires tasks', array( 'tasks' ) === ( $batch_ability['input_schema']['required'] ?? array() ) );
 
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_component_paths'] = array(
+$GLOBALS['wp_codebox_filters']['wp_codebox_component_paths'] = array(
 	'agents_api'        => $root . '/agents-api',
 	'data_machine'      => $root . '/data-machine',
 	'data_machine_code' => $root . '/data-machine-code',
 	'openai_provider'   => $root . '/ai-provider-for-openai',
 );
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_bin'] = $root . '/sandbox-runtime.js';
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_agent'] = 'site-coder';
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_provider'] = 'openai';
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_model'] = 'gpt-5.5';
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_secret_env'] = array( 'OPENAI_API_KEY' );
-$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_codex_auth'] = 'opencode';
+$GLOBALS['wp_codebox_filters']['wp_codebox_bin'] = $root . '/wp-codebox.js';
+$GLOBALS['wp_codebox_filters']['wp_codebox_default_agent'] = 'site-coder';
+$GLOBALS['wp_codebox_filters']['wp_codebox_default_provider'] = 'openai';
+$GLOBALS['wp_codebox_filters']['wp_codebox_default_model'] = 'gpt-5.5';
+$GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI_API_KEY' );
+$GLOBALS['wp_codebox_filters']['wp_codebox_default_codex_auth'] = 'opencode';
 
 $captured_command = '';
-$runner           = new Sandbox_Runtime_Agent_Sandbox_Runner(
+$runner           = new WP_Codebox_Agent_Sandbox_Runner(
 	array(
 		'shell_available' => fn() => true,
 		'command_runner'  => function ( string $command ) use ( &$captured_command ): array {
@@ -118,7 +118,7 @@ $result = $runner->run(
 );
 
 $assert( 'runner succeeds with filter-provided component paths', ! is_wp_error( $result ) && true === ( $result['success'] ?? false ) );
-$assert( 'runner schema is stable', ! is_wp_error( $result ) && 'sandbox-runtime/agent-task-run/v1' === ( $result['schema'] ?? '' ) );
+$assert( 'runner schema is stable', ! is_wp_error( $result ) && 'wp-codebox/agent-task-run/v1' === ( $result['schema'] ?? '' ) );
 $assert( 'runner invokes agent-sandbox-run', str_contains( $captured_command, 'agent-sandbox-run' ) );
 $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node ' ) );
 $assert( 'runner passes task', str_contains( $captured_command, '--task' ) );
@@ -138,7 +138,7 @@ $batch_result = $runner->run_batch(
 );
 
 $assert( 'batch runner succeeds with filter-provided component paths', ! is_wp_error( $batch_result ) && true === ( $batch_result['success'] ?? false ) );
-$assert( 'batch runner schema is stable', ! is_wp_error( $batch_result ) && 'sandbox-runtime/agent-task-batch/v1' === ( $batch_result['schema'] ?? '' ) );
+$assert( 'batch runner schema is stable', ! is_wp_error( $batch_result ) && 'wp-codebox/agent-task-batch/v1' === ( $batch_result['schema'] ?? '' ) );
 $assert( 'batch runner invokes agent-sandbox-batch', str_contains( $captured_command, 'agent-sandbox-batch' ) );
 $assert( 'batch runner passes repeated tasks', 2 === substr_count( $captured_command, '--task' ) );
 $assert( 'batch runner passes concurrency', str_contains( $captured_command, '--concurrency' ) && str_contains( $captured_command, '2' ) );
@@ -148,10 +148,10 @@ $assert( 'batch runner passes codex auth source', str_contains( $captured_comman
 $assert( 'batch runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
 
 $missing_task = $runner->run( array( 'artifacts_path' => $root . '/artifacts' ) );
-$assert( 'missing task fails closed', is_wp_error( $missing_task ) && 'sandbox_runtime_task_missing' === $missing_task->get_error_code() );
+$assert( 'missing task fails closed', is_wp_error( $missing_task ) && 'wp_codebox_task_missing' === $missing_task->get_error_code() );
 
 $missing_tasks = $runner->run_batch( array( 'artifacts_path' => $root . '/artifacts' ) );
-$assert( 'missing batch tasks fails closed', is_wp_error( $missing_tasks ) && 'sandbox_runtime_tasks_missing' === $missing_tasks->get_error_code() );
+$assert( 'missing batch tasks fails closed', is_wp_error( $missing_tasks ) && 'wp_codebox_tasks_missing' === $missing_tasks->get_error_code() );
 
 if ( ! empty( $failures ) ) {
 	echo "\nFAIL: " . count( $failures ) . " assertion(s) failed out of {$total}\n";

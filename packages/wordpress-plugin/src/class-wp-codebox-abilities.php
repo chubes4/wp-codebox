@@ -1,13 +1,13 @@
 <?php
 /**
- * Sandbox Runtime abilities.
+ * WP Codebox abilities.
  *
- * @package SandboxRuntime
+ * @package WPCodebox
  */
 
 defined( 'ABSPATH' ) || exit;
 
-final class Sandbox_Runtime_Abilities {
+final class WP_Codebox_Abilities {
 
 	private static bool $registered = false;
 
@@ -27,11 +27,11 @@ final class Sandbox_Runtime_Abilities {
 	private function register(): void {
 		$register_callback = function (): void {
 			wp_register_ability(
-				'sandbox-runtime/run-agent-task',
+				'wp-codebox/run-agent-task',
 				array(
 					'label'               => 'Run Agent Sandbox Task',
-					'description'         => 'Run a bounded task inside an isolated Sandbox Runtime WordPress agent sandbox and return artifacts.',
-					'category'            => 'sandbox-runtime',
+					'description'         => 'Run a bounded task inside an isolated WP Codebox WordPress agent sandbox and return artifacts.',
+					'category'            => 'wp-codebox',
 					'input_schema'        => array(
 						'type'       => 'object',
 						'required'   => array( 'task' ),
@@ -42,7 +42,7 @@ final class Sandbox_Runtime_Abilities {
 							),
 							'agent'                  => array(
 								'type'        => 'string',
-								'description' => 'Sandbox agent slug to invoke through agents/chat. Defaults through sandbox_runtime_default_agent.',
+								'description' => 'Sandbox agent slug to invoke through agents/chat. Defaults through wp_codebox_default_agent.',
 							),
 							'mode'                   => array(
 								'type'        => 'string',
@@ -87,11 +87,11 @@ final class Sandbox_Runtime_Abilities {
 							),
 							'artifacts_path'         => array(
 								'type'        => 'string',
-								'description' => 'Directory where Sandbox Runtime should write artifact bundles.',
+								'description' => 'Directory where WP Codebox should write artifact bundles.',
 							),
-							'sandbox_runtime_bin'    => array(
+							'wp_codebox_bin'    => array(
 								'type'        => 'string',
-								'description' => 'Sandbox Runtime CLI binary or path. JS dist files are run through node.',
+								'description' => 'WP Codebox CLI binary or path. JS dist files are run through node.',
 							),
 							'agents_api_path'        => array( 'type' => 'string' ),
 							'data_machine_path'      => array( 'type' => 'string' ),
@@ -119,11 +119,11 @@ final class Sandbox_Runtime_Abilities {
 			);
 
 			wp_register_ability(
-				'sandbox-runtime/run-agent-task-batch',
+				'wp-codebox/run-agent-task-batch',
 				array(
 					'label'               => 'Run Agent Sandbox Task Batch',
-					'description'         => 'Run multiple tasks in isolated Sandbox Runtime WordPress agent sandboxes and return artifacts for each run.',
-					'category'            => 'sandbox-runtime',
+					'description'         => 'Run multiple tasks in isolated WP Codebox WordPress agent sandboxes and return artifacts for each run.',
+					'category'            => 'wp-codebox',
 					'input_schema'        => array(
 						'type'       => 'object',
 						'required'   => array( 'tasks' ),
@@ -149,7 +149,7 @@ final class Sandbox_Runtime_Abilities {
 							'max_turns'              => array( 'type' => 'integer' ),
 							'wp'                     => array( 'type' => 'string' ),
 							'artifacts_path'         => array( 'type' => 'string' ),
-							'sandbox_runtime_bin'    => array( 'type' => 'string' ),
+							'wp_codebox_bin'    => array( 'type' => 'string' ),
 							'agents_api_path'        => array( 'type' => 'string' ),
 							'data_machine_path'      => array( 'type' => 'string' ),
 							'data_machine_code_path' => array( 'type' => 'string' ),
@@ -186,17 +186,17 @@ final class Sandbox_Runtime_Abilities {
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	public static function run_agent_task( array $input ): array|WP_Error {
-		return ( new Sandbox_Runtime_Agent_Sandbox_Runner() )->run( $input );
+		return ( new WP_Codebox_Agent_Sandbox_Runner() )->run( $input );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	public static function run_agent_task_batch( array $input ): array|WP_Error {
-		return ( new Sandbox_Runtime_Agent_Sandbox_Runner() )->run_batch( $input );
+		return ( new WP_Codebox_Agent_Sandbox_Runner() )->run_batch( $input );
 	}
 
 	public static function can_run_agent_task(): bool {
 		$allowed = current_user_can( 'manage_options' );
 
-		return (bool) apply_filters( 'sandbox_runtime_can_run_agent_task', $allowed );
+		return (bool) apply_filters( 'wp_codebox_can_run_agent_task', $allowed );
 	}
 }

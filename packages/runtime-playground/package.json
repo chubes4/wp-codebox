@@ -1,5 +1,5 @@
 {
-  "name": "@chubes4/sandbox-runtime-playground",
+  "name": "@chubes4/wp-codebox-playground",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -17,7 +17,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@chubes4/sandbox-runtime-core": "file:../runtime-core",
+    "@chubes4/wp-codebox-core": "file:../runtime-core",
     "@wp-playground/cli": "3.1.30"
   }
 }

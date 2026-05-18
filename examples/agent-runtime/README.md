@@ -9,7 +9,7 @@ AGENTS_API_PATH=/path/to/agents-api \
 DATA_MACHINE_PATH=/path/to/data-machine \
 DATA_MACHINE_CODE_PATH=/path/to/data-machine-code \
 OPENAI_PROVIDER_PATH=/path/to/ai-provider-for-openai \
-npm run sandbox-runtime -- agent-runtime-probe \
+npm run wp-codebox -- agent-runtime-probe \
   --agents-api "$AGENTS_API_PATH" \
   --data-machine "$DATA_MACHINE_PATH" \
   --data-machine-code "$DATA_MACHINE_CODE_PATH" \

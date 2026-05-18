@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Sandbox Runtime Simple Plugin
+ * Plugin Name: WP Codebox Simple Plugin
  * Description: Tiny fixture for the Hello Runtime demo.
  * Version: 0.0.1
  */

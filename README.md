@@ -1,14 +1,14 @@
-# Sandbox Runtime
+# WP Codebox
 
 Portable TypeScript substrate for isolated application runtimes. WordPress Playground is the first backend.
 
 ## Thesis
 
-Sandbox Runtime is not an app, an agent framework, or a CI harness. It is a small runtime contract for app and agent platforms that need to create isolated environments, mount inputs, execute controlled actions, observe state, and export artifacts.
+WP Codebox is not an app, an agent framework, or a CI harness. It is a small runtime contract for app and agent platforms that need to create isolated environments, mount inputs, execute controlled actions, observe state, and export artifacts.
 
 ```text
 App or agent platform
-  -> Sandbox Runtime contract
+  -> WP Codebox contract
   -> Backend adapter
   -> Isolated environment
   -> Artifact bundle
@@ -20,9 +20,9 @@ For WordPress, this means a control plane such as Studio, Data Machine, or WordP
 
 ## Packages
 
-- `@chubes4/sandbox-runtime-core`: backend-agnostic runtime interfaces and shared types.
-- `@chubes4/sandbox-runtime-playground`: first backend adapter shaped around WordPress Playground.
-- `@chubes4/sandbox-runtime-cli`: `sandbox-runtime` command for external consumers.
+- `@chubes4/wp-codebox-core`: backend-agnostic runtime interfaces and shared types.
+- `@chubes4/wp-codebox-playground`: first backend adapter shaped around WordPress Playground.
+- `@chubes4/wp-codebox-cli`: `wp-codebox` command for external consumers.
 - `packages/wordpress-plugin`: WordPress ability surface for parent sites that launch sandboxed agent tasks.
 
 ## CLI
@@ -30,7 +30,7 @@ For WordPress, this means a control plane such as Studio, Data Machine, or WordP
 ```bash
 npm install
 npm run build
-npm run sandbox-runtime -- run \
+npm run wp-codebox -- run \
   --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin \
   --command wordpress.run-php \
   --arg code-file=./examples/simple-plugin/probe.php \
@@ -61,7 +61,7 @@ Expected output:
 }
 ```
 
-Sandbox Runtime mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs PHP from `--arg code-file=...` through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, and CI runners a stable integration seam.
+WP Codebox mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs PHP from `--arg code-file=...` through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, and CI runners a stable integration seam.
 
 `wordpress.run-php` accepts either `--arg code-file=<path>` or `--arg code=<php>`. It loads `/wordpress/wp-load.php` before running the supplied PHP so WordPress functions are available by default. Use `--arg bootstrap=none` for raw PHP execution without WordPress bootstrap.
 
@@ -73,18 +73,18 @@ The fixture plugin is documented in [`examples/simple-plugin/README.md`](example
 
 The WordPress plugin in `packages/wordpress-plugin` registers:
 
-- `sandbox-runtime/run-agent-task`
-- `sandbox-runtime/run-agent-task-batch`
+- `wp-codebox/run-agent-task`
+- `wp-codebox/run-agent-task-batch`
 
-This is the parent-site control-plane surface for frontend/chat integrations. A chat agent can be granted this ability without receiving raw shell or parent-site filesystem access. The ability launches `sandbox-runtime agent-sandbox-run`, which boots a disposable WordPress Playground runtime, mounts the configured agent stack, invokes the sandbox agent through `agents/chat`, and returns artifact metadata.
+This is the parent-site control-plane surface for frontend/chat integrations. A chat agent can be granted this ability without receiving raw shell or parent-site filesystem access. The ability launches `wp-codebox agent-sandbox-run`, which boots a disposable WordPress Playground runtime, mounts the configured agent stack, invokes the sandbox agent through `agents/chat`, and returns artifact metadata.
 
-For parallel cooking, `sandbox-runtime agent-sandbox-batch` and `sandbox-runtime/run-agent-task-batch` accept multiple tasks and run each task in its own isolated Playground sandbox with a bounded concurrency limit. This is the first coordinator primitive for issue fan-out: a parent can turn several GitHub issues into separate sandbox agent runs, and each sandbox agent is responsible for doing its own branch/test/PR work through the mounted coding tools.
+For parallel cooking, `wp-codebox agent-sandbox-batch` and `wp-codebox/run-agent-task-batch` accept multiple tasks and run each task in its own isolated Playground sandbox with a bounded concurrency limit. This is the first coordinator primitive for issue fan-out: a parent can turn several GitHub issues into separate sandbox agent runs, and each sandbox agent is responsible for doing its own branch/test/PR work through the mounted coding tools.
 
 Parent control planes can pass `provider` and `model` to seed the disposable sandbox's Data Machine agent configuration for the requested execution mode. Provider credentials still resolve through the mounted provider's normal scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider, so raw API keys do not need to appear in task payloads. Use `--secret-env OPENAI_API_KEY` or ability input `secret_env: ["OPENAI_API_KEY"]` to allow-list a parent process environment variable for injection into the sandbox PHP process; artifacts record the env name, not the value.
 
 Experimental local-dev spike: `--codex-auth opencode` reads the parent machine's existing OpenCode OpenAI OAuth state, refreshes it when needed, injects only a short-lived access token into the sandbox, and installs a wp-ai-client transporter that rewrites OpenAI Responses API calls to the Codex backend. The OpenCode refresh token remains on the parent machine and is not written to sandbox artifacts. This is not the production connector architecture; parent-site runs should resolve credentials through a connector-owned auth surface.
 
-Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while Sandbox Runtime owns the parent-site control plane and sandbox lifecycle.
+Component paths come from ability input, the `wp_codebox_component_paths` option, or the `wp_codebox_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while WP Codebox owns the parent-site control plane and sandbox lifecycle.
 
 Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.
 
@@ -124,7 +124,7 @@ Disallowed commands throw `RuntimeCommandPolicyViolationError`. The error includ
 
 ## Product Direction
 
-Sandbox Runtime should make isolated app sandboxes usable from real-time products, not only CI or operator tools.
+WP Codebox should make isolated app sandboxes usable from real-time products, not only CI or operator tools.
 
 ```text
 User request
@@ -139,10 +139,10 @@ The first backend is WordPress Playground. Future consumers can include Studio, 
 
 ## Related Issues
 
-- https://github.com/chubes4/sandbox-runtime/issues/1
-- https://github.com/chubes4/sandbox-runtime/issues/2
-- https://github.com/chubes4/sandbox-runtime/issues/3
-- https://github.com/chubes4/sandbox-runtime/issues/4
-- https://github.com/chubes4/sandbox-runtime/issues/5
-- https://github.com/chubes4/sandbox-runtime/issues/6
-- https://github.com/chubes4/sandbox-runtime/issues/7
+- https://github.com/chubes4/wp-codebox/issues/1
+- https://github.com/chubes4/wp-codebox/issues/2
+- https://github.com/chubes4/wp-codebox/issues/3
+- https://github.com/chubes4/wp-codebox/issues/4
+- https://github.com/chubes4/wp-codebox/issues/5
+- https://github.com/chubes4/wp-codebox/issues/6
+- https://github.com/chubes4/wp-codebox/issues/7

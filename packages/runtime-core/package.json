@@ -1,5 +1,5 @@
 {
-  "name": "@chubes4/sandbox-runtime-core",
+  "name": "@chubes4/wp-codebox-core",
   "version": "0.0.0",
   "type": "module",
   "main": "dist/index.js",
