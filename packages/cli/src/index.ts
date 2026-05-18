@@ -37,6 +37,12 @@ interface AgentRuntimeProbeOptions {
   json: boolean
 }
 
+interface AgentSandboxRunOptions extends AgentRuntimeProbeOptions {
+  task: string
+  code?: string
+  codeFile?: string
+}
+
 const defaultPolicy: RuntimePolicy = {
   network: "deny",
   filesystem: "readwrite-mounts",
@@ -56,6 +62,23 @@ async function main(args: string[]): Promise<number> {
   if (command === "agent-runtime-probe") {
     const options = parseAgentRuntimeProbeOptions(args)
     const runOptions = agentRuntimeProbeRunOptions(options)
+    const execute = () => run(runOptions)
+
+    if (!options.json) {
+      const output = await execute()
+      printHumanOutput(output)
+      return output.success ? 0 : 1
+    }
+
+    const { result, logs } = await captureStdout(execute)
+    const output = logs.length > 0 ? { ...result, logs } : result
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    return output.success ? 0 : 1
+  }
+
+  if (command === "agent-sandbox-run") {
+    const options = parseAgentSandboxRunOptions(args)
+    const runOptions = await agentSandboxRunOptions(options)
     const execute = () => run(runOptions)
 
     if (!options.json) {
@@ -93,12 +116,7 @@ async function main(args: string[]): Promise<number> {
 
 function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): RunOptions {
   return {
-    mounts: [
-      { source: resolve(options.agentsApiPath), target: "/wordpress/wp-content/plugins/agents-api", mode: "readwrite" },
-      { source: resolve(options.dataMachinePath), target: "/wordpress/wp-content/plugins/data-machine", mode: "readwrite" },
-      { source: resolve(options.dataMachineCodePath), target: "/wordpress/wp-content/plugins/data-machine-code", mode: "readwrite" },
-      { source: resolve(options.openaiProviderPath), target: "/wordpress/wp-content/plugins/ai-provider-for-openai", mode: "readwrite" },
-    ],
+    mounts: agentRuntimeMounts(options),
     command: "wordpress.run-php",
     args: [`code=${agentRuntimeProbeCode()}`],
     wpVersion: options.wpVersion ?? "trunk",
@@ -107,7 +125,27 @@ function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): RunOpti
   }
 }
 
-function parseAgentRuntimeProbeOptions(args: string[]): AgentRuntimeProbeOptions {
+async function agentSandboxRunOptions(options: AgentSandboxRunOptions): Promise<RunOptions> {
+  return {
+    mounts: agentRuntimeMounts(options),
+    command: "wordpress.run-php",
+    args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options))}`],
+    wpVersion: options.wpVersion ?? "trunk",
+    artifactsDirectory: options.artifactsDirectory,
+    json: options.json,
+  }
+}
+
+function agentRuntimeMounts(options: AgentRuntimeProbeOptions): RunOptions["mounts"] {
+  return [
+    { source: resolve(options.agentsApiPath), target: "/wordpress/wp-content/plugins/agents-api", mode: "readwrite" },
+    { source: resolve(options.dataMachinePath), target: "/wordpress/wp-content/plugins/data-machine", mode: "readwrite" },
+    { source: resolve(options.dataMachineCodePath), target: "/wordpress/wp-content/plugins/data-machine-code", mode: "readwrite" },
+    { source: resolve(options.openaiProviderPath), target: "/wordpress/wp-content/plugins/ai-provider-for-openai", mode: "readwrite" },
+  ]
+}
+
+function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = []): AgentRuntimeProbeOptions {
   const options: Partial<AgentRuntimeProbeOptions> = { json: false }
 
   for (let index = 0; index < args.length; index++) {
@@ -145,6 +183,9 @@ function parseAgentRuntimeProbeOptions(args: string[]): AgentRuntimeProbeOptions
         options.artifactsDirectory = value
         break
       default:
+        if (extraOptions.includes(name)) {
+          break
+        }
         throw new Error(`Unknown option: ${name}`)
     }
   }
@@ -161,6 +202,38 @@ function parseAgentRuntimeProbeOptions(args: string[]): AgentRuntimeProbeOptions
   }
 
   return options as AgentRuntimeProbeOptions
+}
+
+function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--code", "--code-file"]) as Partial<AgentSandboxRunOptions>
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    const [name, inlineValue] = arg.split("=", 2)
+    const value = inlineValue ?? args[index + 1]
+
+    switch (name) {
+      case "--task":
+        options.task = value
+        break
+      case "--code":
+        options.code = value
+        break
+      case "--code-file":
+        options.codeFile = value
+        break
+    }
+  }
+
+  if (!options.task) {
+    throw new Error("Missing required option: --task")
+  }
+
+  if (options.code && options.codeFile) {
+    throw new Error("Use either --code or --code-file, not both")
+  }
+
+  return options as AgentSandboxRunOptions
 }
 
 async function run(options: RunOptions): Promise<RunOutput> {
@@ -352,6 +425,7 @@ function printHelp(): void {
   console.log(`Usage:
   sandbox-runtime run --mount <host>:<vfs> --command <id> [options]
   sandbox-runtime agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> [options]
+  sandbox-runtime agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [options]
 
 Options:
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
@@ -368,8 +442,86 @@ Agent runtime probe options:
   --data-machine-code <path>  Local Data Machine Code plugin checkout.
   --openai-provider <path>    Local AI Provider for OpenAI plugin checkout.
 
+Agent sandbox run options:
+  --task <text>               Task description recorded in the sandbox run.
+  --code <php>                Optional PHP body to run after the agent stack boots.
+  --code-file <path>          Optional PHP file to run after the agent stack boots.
+
 Example:
   sandbox-runtime run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json`)
+}
+
+async function resolveSandboxTaskCode(options: AgentSandboxRunOptions): Promise<string> {
+  if (options.code) {
+    return options.code
+  }
+
+  if (options.codeFile) {
+    return readFile(resolve(options.codeFile), "utf8")
+  }
+
+  return `echo json_encode(array('task_received' => true), JSON_PRETTY_PRINT);`
+}
+
+function agentSandboxRunCode(task: string, code: string): string {
+  return `<?php
+require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+$plugins = array(
+    'agents-api/agents-api.php',
+    'data-machine/data-machine.php',
+    'data-machine-code/data-machine-code.php',
+    'ai-provider-for-openai/plugin.php',
+);
+
+$activation_results = array();
+
+foreach ($plugins as $plugin) {
+    $result = activate_plugin($plugin);
+    $activation_results[$plugin] = array(
+        'active' => is_plugin_active($plugin),
+        'error' => is_wp_error($result) ? $result->get_error_message() : null,
+    );
+}
+
+do_action('plugins_loaded');
+do_action('init');
+do_action('wp_abilities_api_categories_init');
+do_action('wp_abilities_api_init');
+
+$sandbox_task = ${JSON.stringify(task)};
+$sandbox_stack = array(
+    'plugins' => $activation_results,
+    'signals' => array(
+        'agents_api_loaded' => defined('AGENTS_API_LOADED'),
+        'agents_registry_class' => class_exists('WP_Agents_Registry'),
+        'data_machine_version' => defined('DATAMACHINE_VERSION') ? DATAMACHINE_VERSION : null,
+        'data_machine_permission_helper' => class_exists('DataMachine\\Abilities\\PermissionHelper'),
+        'data_machine_code_version' => defined('DATAMACHINE_CODE_VERSION') ? DATAMACHINE_CODE_VERSION : null,
+        'data_machine_code_workspace' => class_exists('DataMachineCode\\Workspace\\Workspace'),
+        'openai_provider_plugin_loaded' => function_exists('WordPress\\OpenAiAiProvider\\register_provider'),
+    ),
+);
+
+ob_start();
+${phpBody(code)}
+$sandbox_output = ob_get_clean();
+
+echo json_encode(
+    array(
+        'command' => 'agent-sandbox.run',
+        'task' => $sandbox_task,
+        'wp_loaded' => function_exists('wp_insert_post'),
+        'stack' => $sandbox_stack,
+        'output' => $sandbox_output,
+    ),
+    JSON_PRETTY_PRINT
+);
+`
+}
+
+function phpBody(code: string): string {
+  return code.trimStart().replace(/^<\?php\s*/, "")
 }
 
 function agentRuntimeProbeCode(): string {

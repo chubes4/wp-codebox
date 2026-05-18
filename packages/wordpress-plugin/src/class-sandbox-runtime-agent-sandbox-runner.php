@@ -1,0 +1,258 @@
+<?php
+/**
+ * Host-side Sandbox Runtime agent sandbox runner.
+ *
+ * @package SandboxRuntime
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+final class Sandbox_Runtime_Agent_Sandbox_Runner {
+
+	private const SCHEMA = 'sandbox-runtime/agent-task-run/v1';
+
+	/** @var array<string, callable> */
+	private array $callbacks;
+
+	/**
+	 * @param array<string, callable> $callbacks Test seams for pure-PHP smoke coverage.
+	 */
+	public function __construct( array $callbacks = array() ) {
+		$this->callbacks = $callbacks;
+	}
+
+	/**
+	 * Run a task inside an isolated Sandbox Runtime agent sandbox.
+	 *
+	 * @param array<string,mixed> $input Ability input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	public function run( array $input ): array|WP_Error {
+		if ( ! $this->shell_available() ) {
+			return new WP_Error( 'sandbox_runtime_shell_unavailable', 'Shell execution is not available for Sandbox Runtime.', array( 'status' => 500 ) );
+		}
+
+		$task = trim( (string) ( $input['task'] ?? '' ) );
+		if ( '' === $task ) {
+			return new WP_Error( 'sandbox_runtime_task_missing', 'task is required.', array( 'status' => 400 ) );
+		}
+
+		$paths = $this->resolve_component_paths( $input );
+		if ( is_wp_error( $paths ) ) {
+			return $paths;
+		}
+
+		$code      = trim( (string) ( $input['code'] ?? '' ) );
+		$code_file = $this->clean_path( (string) ( $input['code_file'] ?? '' ) );
+		if ( '' !== $code && '' !== $code_file ) {
+			return new WP_Error( 'sandbox_runtime_code_conflict', 'Use either code or code_file, not both.', array( 'status' => 400 ) );
+		}
+
+		$artifacts = $this->clean_path( (string) ( $input['artifacts_path'] ?? $this->default_artifacts_path() ) );
+		$wp_version = trim( (string) ( $input['wp'] ?? 'trunk' ) );
+		if ( '' === $wp_version ) {
+			$wp_version = 'trunk';
+		}
+
+		$bin = trim( (string) ( $input['sandbox_runtime_bin'] ?? $this->default_bin() ) );
+		if ( '' === $bin || ! preg_match( '#^[A-Za-z0-9_./:@+-]+$#', $bin ) ) {
+			return new WP_Error( 'sandbox_runtime_bin_invalid', 'sandbox_runtime_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
+		}
+
+		$command = sprintf(
+			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --task %s --wp %s --artifacts %s --json',
+			$this->command_prefix( $bin ),
+			escapeshellarg( $paths['agents_api'] ),
+			escapeshellarg( $paths['data_machine'] ),
+			escapeshellarg( $paths['data_machine_code'] ),
+			escapeshellarg( $paths['openai_provider'] ),
+			escapeshellarg( $task ),
+			escapeshellarg( $wp_version ),
+			escapeshellarg( $artifacts )
+		);
+
+		if ( '' !== $code ) {
+			$command .= ' --code ' . escapeshellarg( $code );
+		}
+
+		if ( '' !== $code_file ) {
+			$command .= ' --code-file ' . escapeshellarg( $code_file );
+		}
+
+		$result    = $this->run_command( $command );
+		$exit_code = (int) ( $result['exit_code'] ?? 1 );
+		$output    = (string) ( $result['output'] ?? '' );
+		$decoded   = $this->decode_json_output( $output );
+
+		if ( is_wp_error( $decoded ) ) {
+			return new WP_Error(
+				'sandbox_runtime_json_invalid',
+				'Sandbox Runtime did not return valid JSON: ' . $decoded->get_error_message(),
+				array(
+					'status'    => 500,
+					'exit_code' => $exit_code,
+					'output'    => $this->bound_output( $output ),
+				)
+			);
+		}
+
+		if ( 0 !== $exit_code ) {
+			return new WP_Error(
+				'sandbox_runtime_run_failed',
+				'Sandbox Runtime agent sandbox run failed.',
+				array(
+					'status'    => 500,
+					'exit_code' => $exit_code,
+					'output'    => $this->bound_output( $output ),
+					'run'       => $decoded,
+				)
+			);
+		}
+
+		return array(
+			'success'   => true,
+			'schema'    => self::SCHEMA,
+			'task'      => $task,
+			'wp'        => $wp_version,
+			'paths'     => $paths,
+			'artifacts' => $artifacts,
+			'exit_code' => $exit_code,
+			'run'       => $decoded,
+		);
+	}
+
+	/**
+	 * @param array<string,mixed> $input Ability input.
+	 * @return array{agents_api:string,data_machine:string,data_machine_code:string,openai_provider:string}|WP_Error
+	 */
+	private function resolve_component_paths( array $input ): array|WP_Error {
+		$configured = $this->configured_paths();
+		$paths      = array(
+			'agents_api'        => $this->clean_path( (string) ( $input['agents_api_path'] ?? $configured['agents_api'] ?? '' ) ),
+			'data_machine'      => $this->clean_path( (string) ( $input['data_machine_path'] ?? $configured['data_machine'] ?? '' ) ),
+			'data_machine_code' => $this->clean_path( (string) ( $input['data_machine_code_path'] ?? $configured['data_machine_code'] ?? '' ) ),
+			'openai_provider'   => $this->clean_path( (string) ( $input['openai_provider_path'] ?? $configured['openai_provider'] ?? '' ) ),
+		);
+
+		foreach ( $paths as $key => $path ) {
+			if ( '' === $path || ! is_dir( $path ) ) {
+				return new WP_Error( 'sandbox_runtime_component_path_missing', sprintf( 'Sandbox Runtime component path %s is missing or not a directory.', $key ), array( 'status' => 400 ) );
+			}
+		}
+
+		return $paths;
+	}
+
+	/** @return array<string,string> */
+	private function configured_paths(): array {
+		$paths = array();
+		if ( function_exists( 'get_option' ) ) {
+			$option = get_option( 'sandbox_runtime_component_paths', array() );
+			if ( is_array( $option ) ) {
+				$paths = $option;
+			}
+		}
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$paths = apply_filters( 'sandbox_runtime_component_paths', $paths );
+		}
+
+		return is_array( $paths ) ? $paths : array();
+	}
+
+	private function shell_available(): bool {
+		if ( isset( $this->callbacks['shell_available'] ) ) {
+			return (bool) ( $this->callbacks['shell_available'] )();
+		}
+
+		return function_exists( 'exec' ) && function_exists( 'shell_exec' );
+	}
+
+	private function default_artifacts_path(): string {
+		$base = function_exists( 'wp_upload_dir' ) ? wp_upload_dir() : array( 'basedir' => sys_get_temp_dir() );
+		$root = is_array( $base ) && ! empty( $base['basedir'] ) ? (string) $base['basedir'] : sys_get_temp_dir();
+
+		return rtrim( $root, DIRECTORY_SEPARATOR ) . DIRECTORY_SEPARATOR . 'sandbox-runtime' . DIRECTORY_SEPARATOR . $this->generate_run_id();
+	}
+
+	private function default_bin(): string {
+		$bin = 'sandbox-runtime';
+		if ( function_exists( 'get_option' ) ) {
+			$bin = (string) get_option( 'sandbox_runtime_bin', $bin );
+		}
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$bin = (string) apply_filters( 'sandbox_runtime_bin', $bin );
+		}
+
+		return $bin;
+	}
+
+	private function clean_path( string $path ): string {
+		return rtrim( trim( $path ), DIRECTORY_SEPARATOR );
+	}
+
+	private function command_prefix( string $bin ): string {
+		if ( str_ends_with( $bin, '.js' ) && is_file( $bin ) ) {
+			return 'node ' . escapeshellarg( $bin );
+		}
+
+		return escapeshellarg( $bin );
+	}
+
+	private function generate_run_id(): string {
+		if ( function_exists( 'wp_generate_uuid4' ) ) {
+			return wp_generate_uuid4();
+		}
+
+		return bin2hex( random_bytes( 16 ) );
+	}
+
+	/** @return array<string,mixed>|WP_Error */
+	private function decode_json_output( string $output ): array|WP_Error {
+		$trimmed = trim( $output );
+		if ( '' === $trimmed ) {
+			return new WP_Error( 'empty_output', 'Empty output.' );
+		}
+
+		$decoded = json_decode( $trimmed, true );
+		if ( is_array( $decoded ) ) {
+			return $decoded;
+		}
+
+		$offset = strrpos( $trimmed, "\n{" );
+		if ( false !== $offset ) {
+			$decoded = json_decode( substr( $trimmed, $offset + 1 ), true );
+			if ( is_array( $decoded ) ) {
+				return $decoded;
+			}
+		}
+
+		return new WP_Error( 'json_decode_failed', json_last_error_msg() );
+	}
+
+	/** @return array{exit_code:int,output:string} */
+	private function run_command( string $command ): array {
+		if ( isset( $this->callbacks['command_runner'] ) ) {
+			return ( $this->callbacks['command_runner'] )( $command );
+		}
+
+		$output = array();
+		$exit   = 0;
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Required host-side Sandbox Runtime execution primitive.
+		exec( $command . ' 2>&1', $output, $exit );
+
+		return array(
+			'exit_code' => $exit,
+			'output'    => implode( "\n", $output ),
+		);
+	}
+
+	private function bound_output( string $output ): string {
+		if ( strlen( $output ) <= 4000 ) {
+			return $output;
+		}
+
+		return substr( $output, 0, 4000 );
+	}
+}

@@ -23,6 +23,7 @@ For WordPress, this means a control plane such as Studio, Data Machine, or WordP
 - `@chubes4/sandbox-runtime-core`: backend-agnostic runtime interfaces and shared types.
 - `@chubes4/sandbox-runtime-playground`: first backend adapter shaped around WordPress Playground.
 - `@chubes4/sandbox-runtime-cli`: `sandbox-runtime` command for external consumers.
+- `packages/wordpress-plugin`: WordPress ability surface for parent sites that launch sandboxed agent tasks.
 
 ## CLI
 
@@ -67,6 +68,18 @@ Sandbox Runtime mounts the local plugin directory into WordPress Playground and 
 Use `--wp trunk`, `--wp nightly`, or a numeric WordPress version when a mounted plugin stack requires a version other than Playground's default.
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
+
+## WordPress Ability Surface
+
+The WordPress plugin in `packages/wordpress-plugin` registers:
+
+- `sandbox-runtime/run-agent-task`
+
+This is the parent-site control-plane surface for frontend/chat integrations. A chat agent can be granted this ability without receiving raw shell or parent-site filesystem access. The ability launches `sandbox-runtime agent-sandbox-run`, which boots a disposable WordPress Playground runtime, mounts the configured agent stack, executes the task, and returns artifact metadata.
+
+Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while Sandbox Runtime owns the parent-site control plane and sandbox lifecycle.
+
+Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.
 
 ## v0 Runtime Policy
 
