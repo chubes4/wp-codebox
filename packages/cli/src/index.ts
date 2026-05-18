@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
-import { join, resolve } from "node:path"
+import { readFile } from "node:fs/promises"
+import { basename, resolve } from "node:path"
 import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
@@ -33,7 +32,7 @@ interface AgentRuntimeProbeOptions {
   agentsApiPath: string
   dataMachinePath: string
   dataMachineCodePath: string
-  openaiProviderPath: string
+  providerPluginPaths: string[]
   wpVersion?: string
   artifactsDirectory?: string
   secretEnvNames?: string[]
@@ -46,7 +45,6 @@ interface AgentSandboxRunOptions extends AgentRuntimeProbeOptions {
   mode?: string
   provider?: string
   model?: string
-  codexAuth?: string
   sessionId?: string
   maxTurns?: string
   code?: string
@@ -59,7 +57,6 @@ interface AgentSandboxBatchOptions extends AgentRuntimeProbeOptions {
   mode?: string
   provider?: string
   model?: string
-  codexAuth?: string
   maxTurns?: string
   concurrency?: string
 }
@@ -170,7 +167,7 @@ async function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): P
   return {
     mounts: agentRuntimeMounts(options),
     command: "wordpress.run-php",
-    args: [`code=${agentRuntimeProbeCode()}`],
+    args: [`code=${agentRuntimeProbeCode(providerPluginMounts(options))}`],
     wpVersion: options.wpVersion ?? "trunk",
     artifactsDirectory: options.artifactsDirectory,
     ...await runSecretEnvOptions(options),
@@ -182,7 +179,7 @@ async function agentSandboxRunOptions(options: AgentSandboxRunOptions): Promise<
   return {
     mounts: agentRuntimeMounts(options),
     command: "wordpress.run-php",
-    args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options))}`],
+    args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options), providerPluginMounts(options))}`],
     wpVersion: options.wpVersion ?? "trunk",
     artifactsDirectory: options.artifactsDirectory,
     ...await runSecretEnvOptions(options),
@@ -233,8 +230,19 @@ function agentRuntimeMounts(options: AgentRuntimeProbeOptions): RunOptions["moun
     { source: resolve(options.agentsApiPath), target: "/wordpress/wp-content/plugins/agents-api", mode: "readwrite" },
     { source: resolve(options.dataMachinePath), target: "/wordpress/wp-content/plugins/data-machine", mode: "readwrite" },
     { source: resolve(options.dataMachineCodePath), target: "/wordpress/wp-content/plugins/data-machine-code", mode: "readwrite" },
-    { source: resolve(options.openaiProviderPath), target: "/wordpress/wp-content/plugins/ai-provider-for-openai", mode: "readwrite" },
+    ...providerPluginMounts(options).map((plugin) => ({
+      source: plugin.source,
+      target: `/wordpress/wp-content/plugins/${plugin.slug}`,
+      mode: "readwrite" as const,
+    })),
   ]
+}
+
+function providerPluginMounts(options: AgentRuntimeProbeOptions): Array<{ source: string; slug: string }> {
+  return options.providerPluginPaths.map((pluginPath) => {
+    const source = resolve(pluginPath)
+    return { source, slug: basename(source) }
+  })
 }
 
 function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = []): AgentRuntimeProbeOptions {
@@ -265,8 +273,8 @@ function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = 
       case "--data-machine-code":
         options.dataMachineCodePath = value
         break
-      case "--openai-provider":
-        options.openaiProviderPath = value
+      case "--provider-plugin":
+        options.providerPluginPaths = [...(options.providerPluginPaths ?? []), value]
         break
       case "--wp":
         options.wpVersion = value
@@ -289,18 +297,19 @@ function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = 
     ["--agents-api", options.agentsApiPath],
     ["--data-machine", options.dataMachinePath],
     ["--data-machine-code", options.dataMachineCodePath],
-    ["--openai-provider", options.openaiProviderPath],
   ] as const) {
     if (!option) {
       throw new Error(`Missing required option: ${key}`)
     }
   }
 
+  options.providerPluginPaths = options.providerPluginPaths ?? []
+
   return options as AgentRuntimeProbeOptions
 }
 
 function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--provider", "--model", "--codex-auth", "--session-id", "--max-turns", "--code", "--code-file", "--secret-env"]) as Partial<AgentSandboxRunOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--provider", "--model", "--session-id", "--max-turns", "--code", "--code-file", "--secret-env"]) as Partial<AgentSandboxRunOptions>
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]
@@ -322,9 +331,6 @@ function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
         break
       case "--model":
         options.model = value
-        break
-      case "--codex-auth":
-        options.codexAuth = value
         break
       case "--session-id":
         options.sessionId = value
@@ -353,7 +359,7 @@ function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
 }
 
 async function parseAgentSandboxBatchOptions(args: string[]): Promise<AgentSandboxBatchOptions> {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--provider", "--model", "--codex-auth", "--max-turns", "--concurrency", "--secret-env"]) as Partial<AgentSandboxBatchOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--provider", "--model", "--max-turns", "--concurrency", "--secret-env"]) as Partial<AgentSandboxBatchOptions>
   options.tasks = []
 
   for (let index = 0; index < args.length; index++) {
@@ -388,9 +394,6 @@ async function parseAgentSandboxBatchOptions(args: string[]): Promise<AgentSandb
         break
       case "--model":
         options.model = value
-        break
-      case "--codex-auth":
-        options.codexAuth = value
         break
       case "--max-turns":
         options.maxTurns = value
@@ -455,10 +458,7 @@ function resolveSecretEnv(names: string[]): Record<string, string> {
 }
 
 async function runSecretEnvOptions(options: AgentRuntimeProbeOptions): Promise<Pick<RunOptions, "policy" | "secretEnv">> {
-  const secretEnv = {
-    ...resolveSecretEnv(options.secretEnvNames ?? []),
-    ...await resolveCodexAuthEnv(options),
-  }
+  const secretEnv = resolveSecretEnv(options.secretEnvNames ?? [])
   if (Object.keys(secretEnv).length === 0) {
     return {}
   }
@@ -467,94 +467,6 @@ async function runSecretEnvOptions(options: AgentRuntimeProbeOptions): Promise<P
     policy: secretEnvPolicy,
     secretEnv,
   }
-}
-
-async function resolveCodexAuthEnv(options: AgentRuntimeProbeOptions): Promise<Record<string, string>> {
-  const codexAuth = "codexAuth" in options ? (options as AgentSandboxRunOptions | AgentSandboxBatchOptions).codexAuth : undefined
-  if (!codexAuth) {
-    return {}
-  }
-
-  if (codexAuth !== "opencode") {
-    throw new Error(`Unsupported --codex-auth value: ${codexAuth}`)
-  }
-
-  const auth = await loadOpenCodeOpenAIAuth()
-  if (!auth) {
-    throw new Error("OpenCode OpenAI OAuth auth was not found. Run OpenCode/Kimaki OpenAI login first.")
-  }
-  const active = await refreshOpenCodeOpenAIAuthIfNeeded(auth)
-
-  return {
-    WP_CODEBOX_CODEX_ACCESS_TOKEN: active.access,
-    ...(active.accountId ? { WP_CODEBOX_CODEX_ACCOUNT_ID: active.accountId } : {}),
-  }
-}
-
-type OpenCodeOpenAIAuth = {
-  type: "oauth"
-  access: string
-  refresh: string
-  expires: number
-  accountId?: string
-}
-
-async function loadOpenCodeOpenAIAuth(): Promise<OpenCodeOpenAIAuth | undefined> {
-  const file = opencodeAuthFilePath()
-  const raw = JSON.parse(await readFile(file, "utf8")) as { openai?: Partial<OpenCodeOpenAIAuth> }
-  const auth = raw.openai
-  if (auth?.type !== "oauth" || !auth.access || !auth.refresh || !auth.expires) {
-    return undefined
-  }
-
-  return {
-    type: "oauth",
-    access: auth.access,
-    refresh: auth.refresh,
-    expires: auth.expires,
-    ...(auth.accountId ? { accountId: auth.accountId } : {}),
-  }
-}
-
-async function refreshOpenCodeOpenAIAuthIfNeeded(auth: OpenCodeOpenAIAuth): Promise<OpenCodeOpenAIAuth> {
-  if (auth.expires > Date.now() + 60_000) {
-    return auth
-  }
-
-  const response = await fetch("https://auth.openai.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: auth.refresh,
-      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-    }).toString(),
-  })
-  if (!response.ok) {
-    throw new Error(`OpenCode OpenAI OAuth refresh failed: ${response.status}`)
-  }
-
-  const tokens = await response.json() as { access_token: string; refresh_token: string; expires_in?: number }
-  const refreshed: OpenCodeOpenAIAuth = {
-    type: "oauth",
-    access: tokens.access_token,
-    refresh: tokens.refresh_token,
-    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-    ...(auth.accountId ? { accountId: auth.accountId } : {}),
-  }
-  await writeOpenCodeOpenAIAuth(refreshed)
-  return refreshed
-}
-
-async function writeOpenCodeOpenAIAuth(auth: OpenCodeOpenAIAuth): Promise<void> {
-  const file = opencodeAuthFilePath()
-  const raw = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>
-  raw.openai = auth
-  await writeFile(file, `${JSON.stringify(raw, null, 2)}\n`, "utf8")
-}
-
-function opencodeAuthFilePath(): string {
-  return process.env.XDG_DATA_HOME ? join(process.env.XDG_DATA_HOME, "opencode", "auth.json") : join(homedir(), ".local", "share", "opencode", "auth.json")
 }
 
 async function run(options: RunOptions): Promise<RunOutput> {
@@ -758,9 +670,9 @@ function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
 function printHelp(): void {
   console.log(`Usage:
   wp-codebox run --mount <host>:<vfs> --command <id> [options]
-  wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> [options]
-  wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [options]
-  wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --openai-provider <path> --task <text> [--task <text> ...] [options]
+  wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> [options]
+  wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [options]
+  wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [--task <text> ...] [options]
 
 Options:
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
@@ -775,7 +687,7 @@ Agent runtime probe options:
   --agents-api <path>         Local Agents API plugin checkout.
   --data-machine <path>       Local Data Machine plugin checkout.
   --data-machine-code <path>  Local Data Machine Code plugin checkout.
-  --openai-provider <path>    Local AI Provider for OpenAI plugin checkout.
+  --provider-plugin <path>    Local AI provider plugin checkout. Repeatable.
 
 Agent sandbox run options:
   --task <text>               Task description recorded in the sandbox run.
@@ -783,7 +695,6 @@ Agent sandbox run options:
   --mode <slug>               Agent execution mode. Defaults to sandbox.
   --provider <id>             AI provider id to seed into the sandbox agent config.
   --model <id>                AI model id to seed into the sandbox agent config.
-  --codex-auth opencode       Use local OpenCode Codex OAuth for OpenAI requests.
   --secret-env <name>         Parent environment variable to expose inside the sandbox. Repeatable.
   --session-id <id>           Existing sandbox conversation session id.
   --max-turns <n>             Maximum agent loop turns for the sandbox task.
@@ -794,7 +705,6 @@ Agent sandbox batch options:
   --task <text>               Task to run in its own isolated sandbox. Repeatable.
   --tasks-json <json>         JSON array of task strings or objects with a task string.
   --tasks-file <path>         File containing a JSON task array.
-  --codex-auth opencode       Use local OpenCode Codex OAuth for OpenAI requests in each sandbox.
   --secret-env <name>         Parent environment variable to expose inside each sandbox. Repeatable.
   --concurrency <n>           Maximum concurrent sandboxes. Defaults to 2.
 
@@ -860,8 +770,6 @@ $sandbox_model_settings = json_decode(${JSON.stringify(JSON.stringify(scopedSett
 if (is_array($sandbox_model_settings) && !empty($sandbox_model_settings)) {
     update_option('datamachine_settings', array_merge(get_option('datamachine_settings', array()), $sandbox_model_settings));
 }
-
-${options.codexAuth === "opencode" ? codexTransporterPhp() : ""}
 
 add_filter('agents_chat_permission', static function () {
     return true;
@@ -942,147 +850,35 @@ function scopedSettings(mode: string, provider: string | undefined, model: strin
   }
 }
 
-function codexTransporterPhp(): string {
-  return `
-if (class_exists('\\WordPress\\AiClient\\AiClient') && interface_exists('\\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface')) {
-    $sandbox_codex_registry = \\WordPress\\AiClient\\AiClient::defaultRegistry();
-    $sandbox_codex_access_token = getenv('WP_CODEBOX_CODEX_ACCESS_TOKEN');
-    $sandbox_codex_account_id = getenv('WP_CODEBOX_CODEX_ACCOUNT_ID');
-    if (is_string($sandbox_codex_access_token) && '' !== $sandbox_codex_access_token) {
-        update_option('connectors_ai_openai_api_key', 'wp-codebox-codex-dummy-key');
-        if (!class_exists('WP_Codebox_Codex_Transporter')) {
-            class WP_Codebox_Codex_Transporter implements \\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface {
-                public function __construct(private \\WordPress\\AiClient\\Providers\\Http\\Contracts\\HttpTransporterInterface $inner, private string $access_token, private string $account_id = '') {}
-
-                public function send(\\WordPress\\AiClient\\Providers\\Http\\DTO\\Request $request, ?\\WordPress\\AiClient\\Providers\\Http\\DTO\\RequestOptions $options = null): \\WordPress\\AiClient\\Providers\\Http\\DTO\\Response {
-                    $uri = $request->getUri();
-                    $path = (string) wp_parse_url($uri, PHP_URL_PATH);
-                    if (str_contains($path, '/models')) {
-                        return new \\WordPress\\AiClient\\Providers\\Http\\DTO\\Response(
-                            200,
-                            array('Content-Type' => array('application/json')),
-                            wp_json_encode(array(
-                                'object' => 'list',
-                                'data' => array(
-                                    array('id' => 'gpt-5.5', 'object' => 'model'),
-                                    array('id' => 'gpt-5.4', 'object' => 'model'),
-                                    array('id' => 'gpt-5.1', 'object' => 'model'),
-                                    array('id' => 'gpt-5', 'object' => 'model'),
-                                    array('id' => 'gpt-4.1', 'object' => 'model'),
-                                ),
-                            ))
-                        );
-                    }
-
-                    if (str_contains($path, '/responses') || str_contains($path, '/chat/completions')) {
-                        $headers = $request->getHeaders();
-                        foreach (array_keys($headers) as $name) {
-                            if ('authorization' === strtolower((string) $name)) {
-                                unset($headers[$name]);
-                            }
-                        }
-                        $headers['authorization'] = array('Bearer ' . $this->access_token);
-                        if ('' !== $this->account_id) {
-                            $headers['ChatGPT-Account-Id'] = array($this->account_id);
-                        }
-                        $headers['originator'] = array('wp-codebox');
-                        $headers['User-Agent'] = array('wp-codebox codex-opencode');
-                        $headers['session_id'] = array('wp-codebox');
-
-                        $body = json_decode((string) $request->getBody(), true);
-                        if (!is_array($body)) {
-                            $body = array();
-                        }
-                        if (!isset($body['instructions']) || '' === (string) $body['instructions']) {
-                            $body['instructions'] = 'You are a concise coding agent.';
-                        }
-                        if (isset($body['input']) && is_string($body['input'])) {
-                            $body['input'] = array(
-                                array(
-                                    'role' => 'user',
-                                    'content' => array(
-                                        array('type' => 'input_text', 'text' => $body['input']),
-                                    ),
-                                ),
-                            );
-                        }
-                        $body['store'] = false;
-                        $body['stream'] = true;
-
-                        $request = new \\WordPress\\AiClient\\Providers\\Http\\DTO\\Request(
-                            $request->getMethod(),
-                            'https://chatgpt.com/backend-api/codex/responses',
-                            $headers,
-                            wp_json_encode($body),
-                            $request->getOptions()
-                        );
-                        $response = $this->inner->send($request, $options);
-                        if ($response->isSuccessful()) {
-                            $text = '';
-                            $final_response = null;
-                            foreach (preg_split('/\r?\n/', (string) $response->getBody()) as $line) {
-                                if (!str_starts_with($line, 'data: ')) {
-                                    continue;
-                                }
-                                $event = json_decode(substr($line, 6), true);
-                                if (!is_array($event)) {
-                                    continue;
-                                }
-                                if ('response.output_text.delta' === ($event['type'] ?? '') && isset($event['delta'])) {
-                                    $text .= (string) $event['delta'];
-                                }
-                                if ('response.completed' === ($event['type'] ?? '') && isset($event['response']) && is_array($event['response'])) {
-                                    $final_response = $event['response'];
-                                }
-                            }
-                            if (is_array($final_response)) {
-                                $final_response['output_text'] = $text;
-                                if (empty($final_response['output'])) {
-                                    $final_response['output'] = array(
-                                        array(
-                                            'type' => 'message',
-                                            'role' => 'assistant',
-                                            'status' => 'completed',
-                                            'content' => array(
-                                                array('type' => 'output_text', 'text' => $text),
-                                            ),
-                                        ),
-                                    );
-                                }
-                                return new \\WordPress\\AiClient\\Providers\\Http\\DTO\\Response(
-                                    200,
-                                    array('Content-Type' => array('application/json')),
-                                    wp_json_encode($final_response)
-                                );
-                            }
-                        }
-
-                        return $response;
-                    }
-
-                    return $this->inner->send($request, $options);
-                }
-            }
-        }
-
-        $sandbox_codex_registry->setHttpTransporter(new WP_Codebox_Codex_Transporter($sandbox_codex_registry->getHttpTransporter(), $sandbox_codex_access_token, is_string($sandbox_codex_account_id) ? $sandbox_codex_account_id : ''));
-    }
-}
-`
-}
-
-function agentSandboxRunCode(task: string, code: string): string {
+function agentSandboxRunCode(task: string, code: string, providerPlugins: Array<{ slug: string }>): string {
   return `<?php
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
 add_filter('datamachine_should_load_full_runtime', '__return_true', 1);
 
-$plugins = array(
+$plugins = array_merge(array(
     'agents-api/agents-api.php',
     'data-machine/data-machine.php',
     'data-machine-code/data-machine-code.php',
-    'ai-provider-for-openai/plugin.php',
-);
+), wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)));
+
+function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
+    $entries = array();
+    foreach ($provider_plugins as $plugin) {
+        $slug = isset($plugin['slug']) ? sanitize_key((string) $plugin['slug']) : '';
+        if ('' === $slug) {
+            continue;
+        }
+        $candidates = array($slug . '/plugin.php', $slug . '/' . $slug . '.php');
+        foreach ($candidates as $candidate) {
+            if (file_exists(WP_PLUGIN_DIR . '/' . $candidate)) {
+                $entries[] = $candidate;
+                break;
+            }
+        }
+    }
+    return $entries;
+}
 
 $activation_results = array();
 
@@ -1109,7 +905,7 @@ $sandbox_stack = array(
         'data_machine_permission_helper' => class_exists('DataMachine\\Abilities\\PermissionHelper'),
         'data_machine_code_version' => defined('DATAMACHINE_CODE_VERSION') ? DATAMACHINE_CODE_VERSION : null,
         'data_machine_code_workspace' => class_exists('DataMachineCode\\Workspace\\Workspace'),
-        'openai_provider_plugin_loaded' => function_exists('WordPress\\OpenAiAiProvider\\register_provider'),
+        'provider_plugins' => wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)),
     ),
 );
 
@@ -1134,18 +930,35 @@ function phpBody(code: string): string {
   return code.trimStart().replace(/^<\?php\s*/, "")
 }
 
-function agentRuntimeProbeCode(): string {
+function agentRuntimeProbeCode(providerPlugins: Array<{ slug: string }>): string {
   return `<?php
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
 add_filter('datamachine_should_load_full_runtime', '__return_true', 1);
 
-$plugins = array(
+$plugins = array_merge(array(
     'agents-api/agents-api.php',
     'data-machine/data-machine.php',
     'data-machine-code/data-machine-code.php',
-    'ai-provider-for-openai/plugin.php',
-);
+), wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)));
+
+function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
+    $entries = array();
+    foreach ($provider_plugins as $plugin) {
+        $slug = isset($plugin['slug']) ? sanitize_key((string) $plugin['slug']) : '';
+        if ('' === $slug) {
+            continue;
+        }
+        $candidates = array($slug . '/plugin.php', $slug . '/' . $slug . '.php');
+        foreach ($candidates as $candidate) {
+            if (file_exists(WP_PLUGIN_DIR . '/' . $candidate)) {
+                $entries[] = $candidate;
+                break;
+            }
+        }
+    }
+    return $entries;
+}
 
 $activation_results = array();
 
@@ -1174,7 +987,7 @@ echo json_encode(
             'data_machine_permission_helper' => class_exists('DataMachine\\\\Abilities\\\\PermissionHelper'),
             'data_machine_code_version' => defined('DATAMACHINE_CODE_VERSION') ? DATAMACHINE_CODE_VERSION : null,
             'data_machine_code_workspace' => class_exists('DataMachineCode\\\\Workspace\\\\Workspace'),
-            'openai_provider_plugin_loaded' => function_exists('WordPress\\\\OpenAiAiProvider\\\\register_provider'),
+            'provider_plugins' => wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)),
         ),
     ),
     JSON_PRETTY_PRINT

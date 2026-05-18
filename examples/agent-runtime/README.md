@@ -8,12 +8,12 @@ Set local checkout paths, then run the preset:
 AGENTS_API_PATH=/path/to/agents-api \
 DATA_MACHINE_PATH=/path/to/data-machine \
 DATA_MACHINE_CODE_PATH=/path/to/data-machine-code \
-OPENAI_PROVIDER_PATH=/path/to/ai-provider-for-openai \
+PROVIDER_PLUGIN_PATH=/path/to/ai-provider-plugin \
 npm run wp-codebox -- agent-runtime-probe \
   --agents-api "$AGENTS_API_PATH" \
   --data-machine "$DATA_MACHINE_PATH" \
   --data-machine-code "$DATA_MACHINE_CODE_PATH" \
-  --openai-provider "$OPENAI_PROVIDER_PATH" \
+  --provider-plugin "$PROVIDER_PLUGIN_PATH" \
   --artifacts ./artifacts \
   --json
 ```

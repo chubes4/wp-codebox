@@ -20,18 +20,12 @@ assigning several GitHub issues to separate sandbox coding agents.
 
 Both abilities accept optional `provider` and `model` fields. These seed the
 disposable sandbox's Data Machine agent configuration for the selected execution
-mode. Provider credentials continue to resolve through the provider's normal
-scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider. Pass
-`secret_env` as a list of environment variable names to expose selected parent
-process credentials inside the sandbox; values are read from the process
+mode. Provider plugins are supplied with `provider_plugin_paths`; WP Codebox
+mounts and activates them without knowing provider-specific behavior. Provider
+credentials continue to resolve through the provider's normal scoped mechanism.
+Pass `secret_env` as a list of environment variable names to expose selected
+parent process credentials inside the sandbox; values are read from the process
 environment and are not accepted in the ability payload.
-
-Experimental local-dev spike: pass `codex_auth: "opencode"` to read the parent
-machine's existing OpenCode OpenAI OAuth state, inject only a short-lived access
-token into the sandbox, and install a wp-ai-client transporter that rewrites
-OpenAI Responses calls to the Codex backend. This is not the production
-connector architecture; parent-site runs should resolve credentials through a
-connector-owned auth surface.
 
 ## Configuration
 
@@ -44,7 +38,7 @@ Expected component keys:
 - `agents_api`
 - `data_machine`
 - `data_machine_code`
-- `openai_provider`
+- `provider_plugins` (optional list)
 
 The CLI binary can be supplied by ability input, the `wp_codebox_bin` option,
 or the `wp_codebox_bin` filter.

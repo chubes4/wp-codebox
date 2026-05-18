@@ -5,7 +5,6 @@ $plugins = array(
     'agents-api/agents-api.php',
     'data-machine/data-machine.php',
     'data-machine-code/data-machine-code.php',
-    'ai-provider-for-openai/plugin.php',
 );
 
 $activation_results = array();
@@ -35,7 +34,6 @@ echo json_encode(
             'data_machine_permission_helper' => class_exists('DataMachine\\Abilities\\PermissionHelper'),
             'data_machine_code_version' => defined('DATAMACHINE_CODE_VERSION') ? DATAMACHINE_CODE_VERSION : null,
             'data_machine_code_workspace' => class_exists('DataMachineCode\\Workspace\\Workspace'),
-            'openai_provider_plugin_loaded' => function_exists('WordPress\\OpenAiAiProvider\\register_provider'),
         ),
     ),
     JSON_PRETTY_PRINT

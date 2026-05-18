@@ -56,9 +56,10 @@ final class WP_Codebox_Abilities {
 								'type'        => 'string',
 								'description' => 'AI model id to seed into the sandbox agent config.',
 							),
-							'codex_auth'             => array(
-								'type'        => 'string',
-								'description' => 'Codex OAuth source. Currently supports opencode.',
+							'provider_plugin_paths'  => array(
+								'type'        => 'array',
+								'description' => 'AI provider plugin directories to mount and activate inside the sandbox.',
+								'items'       => array( 'type' => 'string' ),
 							),
 							'secret_env'             => array(
 								'type'        => 'array',
@@ -96,7 +97,6 @@ final class WP_Codebox_Abilities {
 							'agents_api_path'        => array( 'type' => 'string' ),
 							'data_machine_path'      => array( 'type' => 'string' ),
 							'data_machine_code_path' => array( 'type' => 'string' ),
-							'openai_provider_path'   => array( 'type' => 'string' ),
 						),
 					),
 					'output_schema'       => array(
@@ -141,7 +141,10 @@ final class WP_Codebox_Abilities {
 							'mode'                   => array( 'type' => 'string' ),
 							'provider'               => array( 'type' => 'string' ),
 							'model'                  => array( 'type' => 'string' ),
-							'codex_auth'             => array( 'type' => 'string' ),
+							'provider_plugin_paths'  => array(
+								'type'  => 'array',
+								'items' => array( 'type' => 'string' ),
+							),
 							'secret_env'             => array(
 								'type'  => 'array',
 								'items' => array( 'type' => 'string' ),
@@ -153,7 +156,6 @@ final class WP_Codebox_Abilities {
 							'agents_api_path'        => array( 'type' => 'string' ),
 							'data_machine_path'      => array( 'type' => 'string' ),
 							'data_machine_code_path' => array( 'type' => 'string' ),
-							'openai_provider_path'   => array( 'type' => 'string' ),
 						),
 					),
 					'output_schema'       => array(

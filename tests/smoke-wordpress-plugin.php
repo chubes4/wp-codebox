@@ -45,7 +45,7 @@ require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sand
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-abilities.php';
 
 $root = sys_get_temp_dir() . '/wp-codebox-wordpress-plugin-' . getmypid();
-foreach ( array( 'agents-api', 'data-machine', 'data-machine-code', 'ai-provider-for-openai', 'artifacts' ) as $dir ) {
+foreach ( array( 'agents-api', 'data-machine', 'data-machine-code', 'ai-provider-test', 'artifacts' ) as $dir ) {
 	mkdir( $root . '/' . $dir, 0777, true );
 }
 file_put_contents( $root . '/wp-codebox.js', "#!/usr/bin/env node\n" );
@@ -82,14 +82,13 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_component_paths'] = array(
 	'agents_api'        => $root . '/agents-api',
 	'data_machine'      => $root . '/data-machine',
 	'data_machine_code' => $root . '/data-machine-code',
-	'openai_provider'   => $root . '/ai-provider-for-openai',
+	'provider_plugins'  => array( $root . '/ai-provider-test' ),
 );
 $GLOBALS['wp_codebox_filters']['wp_codebox_bin'] = $root . '/wp-codebox.js';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_agent'] = 'site-coder';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_provider'] = 'openai';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_model'] = 'gpt-5.5';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI_API_KEY' );
-$GLOBALS['wp_codebox_filters']['wp_codebox_default_codex_auth'] = 'opencode';
 
 $captured_command = '';
 $runner           = new WP_Codebox_Agent_Sandbox_Runner(
@@ -126,7 +125,7 @@ $assert( 'runner passes default agent', str_contains( $captured_command, '--agen
 $assert( 'runner passes sandbox mode', str_contains( $captured_command, '--mode' ) && str_contains( $captured_command, 'sandbox' ) );
 $assert( 'runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
 $assert( 'runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
-$assert( 'runner passes codex auth source', str_contains( $captured_command, '--codex-auth' ) && str_contains( $captured_command, 'opencode' ) );
+$assert( 'runner passes provider plugin path', str_contains( $captured_command, '--provider-plugin' ) && str_contains( $captured_command, 'ai-provider-test' ) );
 $assert( 'runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
 
 $batch_result = $runner->run_batch(
@@ -144,7 +143,7 @@ $assert( 'batch runner passes repeated tasks', 2 === substr_count( $captured_com
 $assert( 'batch runner passes concurrency', str_contains( $captured_command, '--concurrency' ) && str_contains( $captured_command, '2' ) );
 $assert( 'batch runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
 $assert( 'batch runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
-$assert( 'batch runner passes codex auth source', str_contains( $captured_command, '--codex-auth' ) && str_contains( $captured_command, 'opencode' ) );
+$assert( 'batch runner passes provider plugin path', str_contains( $captured_command, '--provider-plugin' ) && str_contains( $captured_command, 'ai-provider-test' ) );
 $assert( 'batch runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
 
 $missing_task = $runner->run( array( 'artifacts_path' => $root . '/artifacts' ) );

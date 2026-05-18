@@ -61,12 +61,11 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		$command = sprintf(
-			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --task %s --agent %s --mode %s --provider %s --model %s --wp %s --artifacts %s --json',
+			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --task %s --agent %s --mode %s --provider %s --model %s --wp %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
 			escapeshellarg( $paths['agents_api'] ),
 			escapeshellarg( $paths['data_machine'] ),
 			escapeshellarg( $paths['data_machine_code'] ),
-			escapeshellarg( $paths['openai_provider'] ),
 			escapeshellarg( $task ),
 			escapeshellarg( $this->agent_slug( $input ) ),
 			escapeshellarg( $this->mode( $input ) ),
@@ -76,16 +75,16 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			escapeshellarg( $artifacts )
 		);
 
+		foreach ( $this->provider_plugin_paths( $input ) as $provider_plugin_path ) {
+			$command .= ' --provider-plugin ' . escapeshellarg( $provider_plugin_path );
+		}
+
 		if ( ! empty( $input['session_id'] ) ) {
 			$command .= ' --session-id ' . escapeshellarg( (string) $input['session_id'] );
 		}
 
 		if ( ! empty( $input['max_turns'] ) ) {
 			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
-		}
-
-		if ( '' !== $this->codex_auth( $input ) ) {
-			$command .= ' --codex-auth ' . escapeshellarg( $this->codex_auth( $input ) );
 		}
 
 		if ( '' !== $code ) {
@@ -176,12 +175,11 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 		$concurrency = max( 1, (int) ( $input['concurrency'] ?? 2 ) );
 		$command     = sprintf(
-			'%s agent-sandbox-batch --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --agent %s --mode %s --provider %s --model %s --concurrency %s --wp %s --artifacts %s --json',
+			'%s agent-sandbox-batch --agents-api %s --data-machine %s --data-machine-code %s --agent %s --mode %s --provider %s --model %s --concurrency %s --wp %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
 			escapeshellarg( $paths['agents_api'] ),
 			escapeshellarg( $paths['data_machine'] ),
 			escapeshellarg( $paths['data_machine_code'] ),
-			escapeshellarg( $paths['openai_provider'] ),
 			escapeshellarg( $this->agent_slug( $input ) ),
 			escapeshellarg( $this->mode( $input ) ),
 			escapeshellarg( $this->provider( $input ) ),
@@ -191,12 +189,12 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			escapeshellarg( $artifacts )
 		);
 
-		if ( ! empty( $input['max_turns'] ) ) {
-			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
+		foreach ( $this->provider_plugin_paths( $input ) as $provider_plugin_path ) {
+			$command .= ' --provider-plugin ' . escapeshellarg( $provider_plugin_path );
 		}
 
-		if ( '' !== $this->codex_auth( $input ) ) {
-			$command .= ' --codex-auth ' . escapeshellarg( $this->codex_auth( $input ) );
+		if ( ! empty( $input['max_turns'] ) ) {
+			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
 		}
 
 		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
@@ -252,7 +250,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/**
 	 * @param array<string,mixed> $input Ability input.
-	 * @return array{agents_api:string,data_machine:string,data_machine_code:string,openai_provider:string}|WP_Error
+	 * @return array{agents_api:string,data_machine:string,data_machine_code:string}|WP_Error
 	 */
 	private function resolve_component_paths( array $input ): array|WP_Error {
 		$configured = $this->configured_paths();
@@ -260,7 +258,6 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			'agents_api'        => $this->clean_path( (string) ( $input['agents_api_path'] ?? $configured['agents_api'] ?? '' ) ),
 			'data_machine'      => $this->clean_path( (string) ( $input['data_machine_path'] ?? $configured['data_machine'] ?? '' ) ),
 			'data_machine_code' => $this->clean_path( (string) ( $input['data_machine_code_path'] ?? $configured['data_machine_code'] ?? '' ) ),
-			'openai_provider'   => $this->clean_path( (string) ( $input['openai_provider_path'] ?? $configured['openai_provider'] ?? '' ) ),
 		);
 
 		foreach ( $paths as $key => $path ) {
@@ -342,17 +339,24 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		return trim( $model );
 	}
 
-	private function codex_auth( array $input ): string {
-		$codex_auth = trim( (string) ( $input['codex_auth'] ?? '' ) );
-		if ( '' !== $codex_auth ) {
-			return $codex_auth;
+	/** @param array<string,mixed> $input Ability input. @return string[] */
+	private function provider_plugin_paths( array $input ): array {
+		$configured = $this->configured_paths();
+		$paths      = is_array( $input['provider_plugin_paths'] ?? null ) ? $input['provider_plugin_paths'] : ( $configured['provider_plugins'] ?? array() );
+
+		if ( ! is_array( $paths ) ) {
+			return array();
 		}
 
-		if ( function_exists( 'apply_filters' ) ) {
-			$codex_auth = (string) apply_filters( 'wp_codebox_default_codex_auth', '' );
-		}
-
-		return trim( $codex_auth );
+		return array_values(
+			array_filter(
+				array_map(
+					fn( $path ): string => $this->clean_path( (string) $path ),
+					$paths
+				),
+				static fn( string $path ): bool => '' !== $path && is_dir( $path )
+			)
+		);
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return string[] */
