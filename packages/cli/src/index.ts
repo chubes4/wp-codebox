@@ -41,6 +41,8 @@ interface AgentSandboxRunOptions extends AgentRuntimeProbeOptions {
   task: string
   agent?: string
   mode?: string
+  provider?: string
+  model?: string
   sessionId?: string
   maxTurns?: string
   code?: string
@@ -51,6 +53,8 @@ interface AgentSandboxBatchOptions extends AgentRuntimeProbeOptions {
   tasks: string[]
   agent?: string
   mode?: string
+  provider?: string
+  model?: string
   maxTurns?: string
   concurrency?: string
 }
@@ -281,7 +285,7 @@ function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = 
 }
 
 function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--session-id", "--max-turns", "--code", "--code-file"]) as Partial<AgentSandboxRunOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--provider", "--model", "--session-id", "--max-turns", "--code", "--code-file"]) as Partial<AgentSandboxRunOptions>
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]
@@ -297,6 +301,12 @@ function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
         break
       case "--mode":
         options.mode = value
+        break
+      case "--provider":
+        options.provider = value
+        break
+      case "--model":
+        options.model = value
         break
       case "--session-id":
         options.sessionId = value
@@ -325,7 +335,7 @@ function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
 }
 
 async function parseAgentSandboxBatchOptions(args: string[]): Promise<AgentSandboxBatchOptions> {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--max-turns", "--concurrency"]) as Partial<AgentSandboxBatchOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--provider", "--model", "--max-turns", "--concurrency"]) as Partial<AgentSandboxBatchOptions>
   options.tasks = []
 
   for (let index = 0; index < args.length; index++) {
@@ -354,6 +364,12 @@ async function parseAgentSandboxBatchOptions(args: string[]): Promise<AgentSandb
         break
       case "--mode":
         options.mode = value
+        break
+      case "--provider":
+        options.provider = value
+        break
+      case "--model":
+        options.model = value
         break
       case "--max-turns":
         options.maxTurns = value
@@ -623,6 +639,8 @@ Agent sandbox run options:
   --task <text>               Task description recorded in the sandbox run.
   --agent <slug>              Agent slug to invoke through the canonical agents/chat ability.
   --mode <slug>               Agent execution mode. Defaults to sandbox.
+  --provider <id>             AI provider id to seed into the sandbox agent config.
+  --model <id>                AI model id to seed into the sandbox agent config.
   --session-id <id>           Existing sandbox conversation session id.
   --max-turns <n>             Maximum agent loop turns for the sandbox task.
   --code <php>                Optional PHP body to run after the agent stack boots.
@@ -655,17 +673,19 @@ async function resolveSandboxTaskCode(options: AgentSandboxRunOptions): Promise<
 }
 
 function agentChatTaskCode(options: AgentSandboxRunOptions): string {
+  const mode = options.mode ?? "sandbox"
+  const agentConfig = scopedAgentConfig(mode, options.provider, options.model)
   const input: Record<string, unknown> = {
     agent: options.agent,
     message: options.task,
     session_id: options.sessionId ?? null,
-    mode: options.mode ?? "sandbox",
+    mode,
     client_context: {
       source: "bridge",
       client_name: "sandbox-runtime",
       connector_id: "sandbox-runtime-cli",
-      mode: options.mode ?? "sandbox",
-      agent_modes: [options.mode ?? "sandbox"],
+      mode,
+      agent_modes: [mode],
     },
   }
 
@@ -685,9 +705,14 @@ if (class_exists('DataMachine\\Core\\Database\\Agents\\Agents')) {
             $sandbox_agent_slug,
             'Sandbox Agent',
             1,
-            array()
+            json_decode(${JSON.stringify(JSON.stringify(agentConfig))}, true)
         );
     }
+}
+
+$sandbox_model_settings = json_decode(${JSON.stringify(JSON.stringify(scopedSettings(mode, options.provider, options.model)))}, true);
+if (is_array($sandbox_model_settings) && !empty($sandbox_model_settings)) {
+    update_option('datamachine_settings', array_merge(get_option('datamachine_settings', array()), $sandbox_model_settings));
 }
 
 add_filter('agents_chat_permission', static function () {
@@ -733,6 +758,40 @@ if (!$ability || !method_exists($ability, 'execute')) {
 
 echo json_encode($sandbox_agent_runtime, JSON_PRETTY_PRINT);
 `
+}
+
+function scopedAgentConfig(mode: string, provider: string | undefined, model: string | undefined): Record<string, unknown> {
+  if (!provider && !model) {
+    return {}
+  }
+
+  return {
+    ...(provider ? { default_provider: provider } : {}),
+    ...(model ? { default_model: model } : {}),
+    mode_models: {
+      [mode]: {
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+      },
+    },
+  }
+}
+
+function scopedSettings(mode: string, provider: string | undefined, model: string | undefined): Record<string, unknown> {
+  if (!provider && !model) {
+    return {}
+  }
+
+  return {
+    ...(provider ? { default_provider: provider } : {}),
+    ...(model ? { default_model: model } : {}),
+    mode_models: {
+      [mode]: {
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+      },
+    },
+  }
 }
 
 function agentSandboxRunCode(task: string, code: string): string {

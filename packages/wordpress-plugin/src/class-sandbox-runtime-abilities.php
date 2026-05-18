@@ -48,6 +48,14 @@ final class Sandbox_Runtime_Abilities {
 								'type'        => 'string',
 								'description' => 'Agent execution mode. Defaults to sandbox.',
 							),
+							'provider'               => array(
+								'type'        => 'string',
+								'description' => 'AI provider id to seed into the sandbox agent config.',
+							),
+							'model'                  => array(
+								'type'        => 'string',
+								'description' => 'AI model id to seed into the sandbox agent config.',
+							),
 							'session_id'             => array(
 								'type'        => 'string',
 								'description' => 'Existing sandbox conversation session id.',
@@ -122,6 +130,8 @@ final class Sandbox_Runtime_Abilities {
 							),
 							'agent'                  => array( 'type' => 'string' ),
 							'mode'                   => array( 'type' => 'string' ),
+							'provider'               => array( 'type' => 'string' ),
+							'model'                  => array( 'type' => 'string' ),
 							'max_turns'              => array( 'type' => 'integer' ),
 							'wp'                     => array( 'type' => 'string' ),
 							'artifacts_path'         => array( 'type' => 'string' ),

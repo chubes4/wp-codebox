@@ -86,6 +86,8 @@ $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_component_paths'] = array(
 );
 $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_bin'] = $root . '/sandbox-runtime.js';
 $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_agent'] = 'site-coder';
+$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_provider'] = 'openai';
+$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_model'] = 'gpt-5.5';
 
 $captured_command = '';
 $runner           = new Sandbox_Runtime_Agent_Sandbox_Runner(
@@ -120,6 +122,8 @@ $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node '
 $assert( 'runner passes task', str_contains( $captured_command, '--task' ) );
 $assert( 'runner passes default agent', str_contains( $captured_command, '--agent' ) && str_contains( $captured_command, 'site-coder' ) );
 $assert( 'runner passes sandbox mode', str_contains( $captured_command, '--mode' ) && str_contains( $captured_command, 'sandbox' ) );
+$assert( 'runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
+$assert( 'runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
 
 $batch_result = $runner->run_batch(
 	array(
@@ -134,6 +138,8 @@ $assert( 'batch runner schema is stable', ! is_wp_error( $batch_result ) && 'san
 $assert( 'batch runner invokes agent-sandbox-batch', str_contains( $captured_command, 'agent-sandbox-batch' ) );
 $assert( 'batch runner passes repeated tasks', 2 === substr_count( $captured_command, '--task' ) );
 $assert( 'batch runner passes concurrency', str_contains( $captured_command, '--concurrency' ) && str_contains( $captured_command, '2' ) );
+$assert( 'batch runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
+$assert( 'batch runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
 
 $missing_task = $runner->run( array( 'artifacts_path' => $root . '/artifacts' ) );
 $assert( 'missing task fails closed', is_wp_error( $missing_task ) && 'sandbox_runtime_task_missing' === $missing_task->get_error_code() );

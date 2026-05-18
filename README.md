@@ -80,6 +80,8 @@ This is the parent-site control-plane surface for frontend/chat integrations. A 
 
 For parallel cooking, `sandbox-runtime agent-sandbox-batch` and `sandbox-runtime/run-agent-task-batch` accept multiple tasks and run each task in its own isolated Playground sandbox with a bounded concurrency limit. This is the first coordinator primitive for issue fan-out: a parent can turn several GitHub issues into separate sandbox agent runs, and each sandbox agent is responsible for doing its own branch/test/PR work through the mounted coding tools.
 
+Parent control planes can pass `provider` and `model` to seed the disposable sandbox's Data Machine agent configuration for the requested execution mode. Provider credentials still resolve through the mounted provider's normal scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider, so raw API keys do not need to appear in task payloads.
+
 Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while Sandbox Runtime owns the parent-site control plane and sandbox lifecycle.
 
 Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.

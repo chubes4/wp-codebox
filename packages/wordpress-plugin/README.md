@@ -18,6 +18,11 @@ task descriptions, and launches one isolated sandbox per task with bounded
 concurrency. This is the parent-site primitive for fan-out workflows such as
 assigning several GitHub issues to separate sandbox coding agents.
 
+Both abilities accept optional `provider` and `model` fields. These seed the
+disposable sandbox's Data Machine agent configuration for the selected execution
+mode. Provider credentials continue to resolve through the provider's normal
+scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider.
+
 ## Configuration
 
 Component paths can be supplied by ability input, the

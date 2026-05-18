@@ -61,7 +61,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		$command = sprintf(
-			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --task %s --agent %s --mode %s --wp %s --artifacts %s --json',
+			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --task %s --agent %s --mode %s --provider %s --model %s --wp %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
 			escapeshellarg( $paths['agents_api'] ),
 			escapeshellarg( $paths['data_machine'] ),
@@ -70,6 +70,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			escapeshellarg( $task ),
 			escapeshellarg( $this->agent_slug( $input ) ),
 			escapeshellarg( $this->mode( $input ) ),
+			escapeshellarg( $this->provider( $input ) ),
+			escapeshellarg( $this->model( $input ) ),
 			escapeshellarg( $wp_version ),
 			escapeshellarg( $artifacts )
 		);
@@ -166,7 +168,7 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		$concurrency = max( 1, (int) ( $input['concurrency'] ?? 2 ) );
 		$command     = sprintf(
-			'%s agent-sandbox-batch --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --agent %s --mode %s --concurrency %s --wp %s --artifacts %s --json',
+			'%s agent-sandbox-batch --agents-api %s --data-machine %s --data-machine-code %s --openai-provider %s --agent %s --mode %s --provider %s --model %s --concurrency %s --wp %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
 			escapeshellarg( $paths['agents_api'] ),
 			escapeshellarg( $paths['data_machine'] ),
@@ -174,6 +176,8 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			escapeshellarg( $paths['openai_provider'] ),
 			escapeshellarg( $this->agent_slug( $input ) ),
 			escapeshellarg( $this->mode( $input ) ),
+			escapeshellarg( $this->provider( $input ) ),
+			escapeshellarg( $this->model( $input ) ),
 			escapeshellarg( (string) $concurrency ),
 			escapeshellarg( $wp_version ),
 			escapeshellarg( $artifacts )
@@ -294,6 +298,32 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		$mode = trim( (string) ( $input['mode'] ?? '' ) );
 
 		return '' !== $mode ? $mode : 'sandbox';
+	}
+
+	private function provider( array $input ): string {
+		$provider = trim( (string) ( $input['provider'] ?? '' ) );
+		if ( '' !== $provider ) {
+			return $provider;
+		}
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$provider = (string) apply_filters( 'sandbox_runtime_default_provider', '' );
+		}
+
+		return trim( $provider );
+	}
+
+	private function model( array $input ): string {
+		$model = trim( (string) ( $input['model'] ?? '' ) );
+		if ( '' !== $model ) {
+			return $model;
+		}
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$model = (string) apply_filters( 'sandbox_runtime_default_model', '' );
+		}
+
+		return trim( $model );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return string[] */
