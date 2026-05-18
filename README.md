@@ -77,7 +77,7 @@ The WordPress plugin in `packages/wordpress-plugin` registers:
 
 This is the parent-site control-plane surface for frontend/chat integrations. A chat agent can be granted this ability without receiving raw shell or parent-site filesystem access. The ability launches `sandbox-runtime agent-sandbox-run`, which boots a disposable WordPress Playground runtime, mounts the configured agent stack, executes the task, and returns artifact metadata.
 
-Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is one optional component path mounted into the sandbox; it does not own the sandbox control plane.
+Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while Sandbox Runtime owns the parent-site control plane and sandbox lifecycle.
 
 Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.
 

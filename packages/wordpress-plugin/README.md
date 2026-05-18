@@ -29,5 +29,7 @@ or the `sandbox_runtime_bin` filter.
 
 ## Boundary
 
-Data Machine Code is a component that may be mounted into a sandbox. This plugin
-owns the parent-site ability surface for launching sandbox tasks.
+Data Machine Code is the mounted coding-tools component for file-editing agent
+sandboxes. It provides workspace/file/GitHub tools inside the isolated runtime.
+This plugin owns the parent-site ability surface and sandbox lifecycle boundary;
+DMC does not own that control plane.
