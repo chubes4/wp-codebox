@@ -21,7 +21,10 @@ assigning several GitHub issues to separate sandbox coding agents.
 Both abilities accept optional `provider` and `model` fields. These seed the
 disposable sandbox's Data Machine agent configuration for the selected execution
 mode. Provider credentials continue to resolve through the provider's normal
-scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider.
+scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider. Pass
+`secret_env` as a list of environment variable names to expose selected parent
+process credentials inside the sandbox; values are read from the process
+environment and are not accepted in the ability payload.
 
 ## Configuration
 

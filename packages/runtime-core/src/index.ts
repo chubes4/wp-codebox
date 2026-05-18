@@ -47,6 +47,7 @@ export interface RuntimeCreateSpec {
   environment: EnvironmentSpec
   policy: RuntimePolicy
   artifactsDirectory?: string
+  secretEnv?: Record<string, string>
 }
 
 export interface RuntimeInfo {

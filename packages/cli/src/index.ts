@@ -11,6 +11,7 @@ interface RunOptions {
   wpVersion?: string
   artifactsDirectory?: string
   policy?: RuntimePolicy
+  secretEnv?: Record<string, string>
   json: boolean
 }
 
@@ -34,6 +35,7 @@ interface AgentRuntimeProbeOptions {
   openaiProviderPath: string
   wpVersion?: string
   artifactsDirectory?: string
+  secretEnvNames?: string[]
   json: boolean
 }
 
@@ -75,6 +77,11 @@ const defaultPolicy: RuntimePolicy = {
   commands: ["inspect-mounted-inputs", "wordpress.run-php"],
   secrets: "none",
   approvals: "never",
+}
+
+const secretEnvPolicy: RuntimePolicy = {
+  ...defaultPolicy,
+  secrets: "connector-scoped",
 }
 
 async function main(args: string[]): Promise<number> {
@@ -163,6 +170,7 @@ function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): RunOpti
     args: [`code=${agentRuntimeProbeCode()}`],
     wpVersion: options.wpVersion ?? "trunk",
     artifactsDirectory: options.artifactsDirectory,
+    ...runSecretEnvOptions(options),
     json: options.json,
   }
 }
@@ -174,6 +182,7 @@ async function agentSandboxRunOptions(options: AgentSandboxRunOptions): Promise<
     args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options))}`],
     wpVersion: options.wpVersion ?? "trunk",
     artifactsDirectory: options.artifactsDirectory,
+    ...runSecretEnvOptions(options),
     json: options.json,
   }
 }
@@ -262,6 +271,9 @@ function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = 
       case "--artifacts":
         options.artifactsDirectory = value
         break
+      case "--secret-env":
+        options.secretEnvNames = [...(options.secretEnvNames ?? []), value]
+        break
       default:
         if (extraOptions.includes(name)) {
           break
@@ -285,7 +297,7 @@ function parseAgentRuntimeProbeOptions(args: string[], extraOptions: string[] = 
 }
 
 function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--provider", "--model", "--session-id", "--max-turns", "--code", "--code-file"]) as Partial<AgentSandboxRunOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--agent", "--mode", "--provider", "--model", "--session-id", "--max-turns", "--code", "--code-file", "--secret-env"]) as Partial<AgentSandboxRunOptions>
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]
@@ -335,7 +347,7 @@ function parseAgentSandboxRunOptions(args: string[]): AgentSandboxRunOptions {
 }
 
 async function parseAgentSandboxBatchOptions(args: string[]): Promise<AgentSandboxBatchOptions> {
-  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--provider", "--model", "--max-turns", "--concurrency"]) as Partial<AgentSandboxBatchOptions>
+  const options = parseAgentRuntimeProbeOptions(args, ["--task", "--tasks-json", "--tasks-file", "--agent", "--mode", "--provider", "--model", "--max-turns", "--concurrency", "--secret-env"]) as Partial<AgentSandboxBatchOptions>
   options.tasks = []
 
   for (let index = 0; index < args.length; index++) {
@@ -416,6 +428,35 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function resolveSecretEnv(names: string[]): Record<string, string> {
+  const secretEnv: Record<string, string> = {}
+  for (const name of names) {
+    const normalized = name.trim()
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(normalized)) {
+      throw new Error(`Invalid --secret-env name: ${name}`)
+    }
+
+    const value = process.env[normalized]
+    if (value) {
+      secretEnv[normalized] = value
+    }
+  }
+
+  return secretEnv
+}
+
+function runSecretEnvOptions(options: AgentRuntimeProbeOptions): Pick<RunOptions, "policy" | "secretEnv"> {
+  const secretEnv = resolveSecretEnv(options.secretEnvNames ?? [])
+  if (Object.keys(secretEnv).length === 0) {
+    return {}
+  }
+
+  return {
+    policy: secretEnvPolicy,
+    secretEnv,
+  }
+}
+
 async function run(options: RunOptions): Promise<RunOutput> {
   let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined
   let execution: ExecutionResult | undefined
@@ -432,6 +473,7 @@ async function run(options: RunOptions): Promise<RunOutput> {
           blueprint: { steps: [] },
         },
         policy: options.policy ?? defaultPolicy,
+        secretEnv: options.secretEnv,
         artifactsDirectory: options.artifactsDirectory,
       },
       createPlaygroundRuntimeBackend(),
@@ -641,6 +683,7 @@ Agent sandbox run options:
   --mode <slug>               Agent execution mode. Defaults to sandbox.
   --provider <id>             AI provider id to seed into the sandbox agent config.
   --model <id>                AI model id to seed into the sandbox agent config.
+  --secret-env <name>         Parent environment variable to expose inside the sandbox. Repeatable.
   --session-id <id>           Existing sandbox conversation session id.
   --max-turns <n>             Maximum agent loop turns for the sandbox task.
   --code <php>                Optional PHP body to run after the agent stack boots.
@@ -650,6 +693,7 @@ Agent sandbox batch options:
   --task <text>               Task to run in its own isolated sandbox. Repeatable.
   --tasks-json <json>         JSON array of task strings or objects with a task string.
   --tasks-file <path>         File containing a JSON task array.
+  --secret-env <name>         Parent environment variable to expose inside each sandbox. Repeatable.
   --concurrency <n>           Maximum concurrent sandboxes. Defaults to 2.
 
 Example:

@@ -320,7 +320,19 @@ class PlaygroundRuntime implements Runtime {
 
     return `<?php
 require_once '/wordpress/wp-load.php';
+${this.secretEnvPhp()}
 ${phpBody(code)}`
+  }
+
+  private secretEnvPhp(): string {
+    const entries = Object.entries(this.spec.secretEnv ?? {}).filter(([name]) => isSafeEnvName(name))
+    if (entries.length === 0) {
+      return ""
+    }
+
+    return `${entries
+      .map(([name, value]) => `putenv(${JSON.stringify(`${name}=${value}`)});`)
+      .join("\n")}\n`
   }
 
   private async phpCodeFromArgs(args: string[]): Promise<string> {
@@ -416,6 +428,10 @@ function argValue(args: string[], name: string): string | undefined {
   const prefix = `${name}=`
   const match = args.find((arg) => arg.startsWith(prefix))
   return match?.slice(prefix.length)
+}
+
+function isSafeEnvName(name: string): boolean {
+  return /^[A-Z_][A-Z0-9_]*$/.test(name)
 }
 
 function normalizePhpCode(code: string): string {

@@ -56,6 +56,11 @@ final class Sandbox_Runtime_Abilities {
 								'type'        => 'string',
 								'description' => 'AI model id to seed into the sandbox agent config.',
 							),
+							'secret_env'             => array(
+								'type'        => 'array',
+								'description' => 'Parent environment variable names to expose inside the sandbox. Values are read from the parent process, not from this payload.',
+								'items'       => array( 'type' => 'string' ),
+							),
 							'session_id'             => array(
 								'type'        => 'string',
 								'description' => 'Existing sandbox conversation session id.',
@@ -132,6 +137,10 @@ final class Sandbox_Runtime_Abilities {
 							'mode'                   => array( 'type' => 'string' ),
 							'provider'               => array( 'type' => 'string' ),
 							'model'                  => array( 'type' => 'string' ),
+							'secret_env'             => array(
+								'type'  => 'array',
+								'items' => array( 'type' => 'string' ),
+							),
 							'max_turns'              => array( 'type' => 'integer' ),
 							'wp'                     => array( 'type' => 'string' ),
 							'artifacts_path'         => array( 'type' => 'string' ),

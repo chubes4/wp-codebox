@@ -92,6 +92,10 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			$command .= ' --code-file ' . escapeshellarg( $code_file );
 		}
 
+		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
+			$command .= ' --secret-env ' . escapeshellarg( $secret_env );
+		}
+
 		$result    = $this->run_command( $command );
 		$exit_code = (int) ( $result['exit_code'] ?? 1 );
 		$output    = (string) ( $result['output'] ?? '' );
@@ -185,6 +189,10 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( ! empty( $input['max_turns'] ) ) {
 			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
+		}
+
+		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
+			$command .= ' --secret-env ' . escapeshellarg( $secret_env );
 		}
 
 		foreach ( $tasks as $task ) {
@@ -324,6 +332,30 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		return trim( $model );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return string[] */
+	private function secret_env_names( array $input ): array {
+		$names = is_array( $input['secret_env'] ?? null ) ? $input['secret_env'] : array();
+		if ( empty( $names ) && function_exists( 'apply_filters' ) ) {
+			$names = apply_filters( 'sandbox_runtime_default_secret_env', array() );
+		}
+
+		if ( ! is_array( $names ) ) {
+			return array();
+		}
+
+		return array_values(
+			array_unique(
+				array_filter(
+					array_map(
+						static fn( $name ): string => trim( (string) $name ),
+						$names
+					),
+					static fn( string $name ): bool => 1 === preg_match( '/^[A-Z_][A-Z0-9_]*$/', $name )
+				)
+			)
+		);
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return string[] */
