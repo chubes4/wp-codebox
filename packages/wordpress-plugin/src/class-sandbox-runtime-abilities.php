@@ -56,6 +56,10 @@ final class Sandbox_Runtime_Abilities {
 								'type'        => 'string',
 								'description' => 'AI model id to seed into the sandbox agent config.',
 							),
+							'codex_auth'             => array(
+								'type'        => 'string',
+								'description' => 'Codex OAuth source. Currently supports opencode.',
+							),
 							'secret_env'             => array(
 								'type'        => 'array',
 								'description' => 'Parent environment variable names to expose inside the sandbox. Values are read from the parent process, not from this payload.',
@@ -137,6 +141,7 @@ final class Sandbox_Runtime_Abilities {
 							'mode'                   => array( 'type' => 'string' ),
 							'provider'               => array( 'type' => 'string' ),
 							'model'                  => array( 'type' => 'string' ),
+							'codex_auth'             => array( 'type' => 'string' ),
 							'secret_env'             => array(
 								'type'  => 'array',
 								'items' => array( 'type' => 'string' ),

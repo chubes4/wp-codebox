@@ -84,6 +84,10 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
 		}
 
+		if ( '' !== $this->codex_auth( $input ) ) {
+			$command .= ' --codex-auth ' . escapeshellarg( $this->codex_auth( $input ) );
+		}
+
 		if ( '' !== $code ) {
 			$command .= ' --code ' . escapeshellarg( $code );
 		}
@@ -189,6 +193,10 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 
 		if ( ! empty( $input['max_turns'] ) ) {
 			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
+		}
+
+		if ( '' !== $this->codex_auth( $input ) ) {
+			$command .= ' --codex-auth ' . escapeshellarg( $this->codex_auth( $input ) );
 		}
 
 		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
@@ -332,6 +340,19 @@ final class Sandbox_Runtime_Agent_Sandbox_Runner {
 		}
 
 		return trim( $model );
+	}
+
+	private function codex_auth( array $input ): string {
+		$codex_auth = trim( (string) ( $input['codex_auth'] ?? '' ) );
+		if ( '' !== $codex_auth ) {
+			return $codex_auth;
+		}
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$codex_auth = (string) apply_filters( 'sandbox_runtime_default_codex_auth', '' );
+		}
+
+		return trim( $codex_auth );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return string[] */

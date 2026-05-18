@@ -82,6 +82,8 @@ For parallel cooking, `sandbox-runtime agent-sandbox-batch` and `sandbox-runtime
 
 Parent control planes can pass `provider` and `model` to seed the disposable sandbox's Data Machine agent configuration for the requested execution mode. Provider credentials still resolve through the mounted provider's normal scoped mechanism, such as `OPENAI_API_KEY` for the OpenAI provider, so raw API keys do not need to appear in task payloads. Use `--secret-env OPENAI_API_KEY` or ability input `secret_env: ["OPENAI_API_KEY"]` to allow-list a parent process environment variable for injection into the sandbox PHP process; artifacts record the env name, not the value.
 
+Experimental local-dev spike: `--codex-auth opencode` reads the parent machine's existing OpenCode OpenAI OAuth state, refreshes it when needed, injects only a short-lived access token into the sandbox, and installs a wp-ai-client transporter that rewrites OpenAI Responses API calls to the Codex backend. The OpenCode refresh token remains on the parent machine and is not written to sandbox artifacts. This is not the production connector architecture; parent-site runs should resolve credentials through a connector-owned auth surface.
+
 Component paths come from ability input, the `sandbox_runtime_component_paths` option, or the `sandbox_runtime_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while Sandbox Runtime owns the parent-site control plane and sandbox lifecycle.
 
 Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.

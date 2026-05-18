@@ -89,6 +89,7 @@ $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_agent'] = 'site-cod
 $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_provider'] = 'openai';
 $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_model'] = 'gpt-5.5';
 $GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_secret_env'] = array( 'OPENAI_API_KEY' );
+$GLOBALS['sandbox_runtime_filters']['sandbox_runtime_default_codex_auth'] = 'opencode';
 
 $captured_command = '';
 $runner           = new Sandbox_Runtime_Agent_Sandbox_Runner(
@@ -125,6 +126,7 @@ $assert( 'runner passes default agent', str_contains( $captured_command, '--agen
 $assert( 'runner passes sandbox mode', str_contains( $captured_command, '--mode' ) && str_contains( $captured_command, 'sandbox' ) );
 $assert( 'runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
 $assert( 'runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
+$assert( 'runner passes codex auth source', str_contains( $captured_command, '--codex-auth' ) && str_contains( $captured_command, 'opencode' ) );
 $assert( 'runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
 
 $batch_result = $runner->run_batch(
@@ -142,6 +144,7 @@ $assert( 'batch runner passes repeated tasks', 2 === substr_count( $captured_com
 $assert( 'batch runner passes concurrency', str_contains( $captured_command, '--concurrency' ) && str_contains( $captured_command, '2' ) );
 $assert( 'batch runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
 $assert( 'batch runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
+$assert( 'batch runner passes codex auth source', str_contains( $captured_command, '--codex-auth' ) && str_contains( $captured_command, 'opencode' ) );
 $assert( 'batch runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
 
 $missing_task = $runner->run( array( 'artifacts_path' => $root . '/artifacts' ) );
