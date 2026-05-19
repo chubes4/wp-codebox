@@ -71,6 +71,7 @@ $ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-tas
 $assert( 'run-agent-task ability registered', is_array( $ability ) );
 $assert( 'ability is REST visible', true === ( $ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'ability requires task only', array( 'task' ) === ( $ability['input_schema']['required'] ?? array() ) );
+$assert( 'ability omits raw code input', ! isset( $ability['input_schema']['properties']['code'] ) && ! isset( $ability['input_schema']['properties']['code_file'] ) );
 $assert( 'permission defaults to manage_options', true === call_user_func( $ability['permission_callback'] ) );
 
 $batch_ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task-batch'] ?? null;
@@ -127,6 +128,25 @@ $assert( 'runner passes default provider', str_contains( $captured_command, '--p
 $assert( 'runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
 $assert( 'runner passes provider plugin path', str_contains( $captured_command, '--provider-plugin' ) && str_contains( $captured_command, 'ai-provider-test' ) );
 $assert( 'runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
+$assert( 'runner does not pass raw code options', ! str_contains( $captured_command, '--code ' ) && ! str_contains( $captured_command, '--code-file' ) );
+
+$raw_code = $runner->run(
+	array(
+		'task'           => 'Run a chat-requested sandbox task.',
+		'artifacts_path' => $root . '/artifacts',
+		'code'           => '<?php echo "raw";',
+	)
+);
+$assert( 'raw code input fails closed', is_wp_error( $raw_code ) && 'wp_codebox_raw_code_forbidden' === $raw_code->get_error_code() );
+
+$raw_code_file = $runner->run(
+	array(
+		'task'           => 'Run a chat-requested sandbox task.',
+		'artifacts_path' => $root . '/artifacts',
+		'code_file'      => '/tmp/raw.php',
+	)
+);
+$assert( 'raw code file input fails closed', is_wp_error( $raw_code_file ) && 'wp_codebox_raw_code_forbidden' === $raw_code_file->get_error_code() );
 
 $batch_result = $runner->run_batch(
 	array(

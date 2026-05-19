@@ -74,14 +74,6 @@ final class WP_Codebox_Abilities {
 								'type'        => 'integer',
 								'description' => 'Maximum agent loop turns for this sandbox task.',
 							),
-							'code'                   => array(
-								'type'        => 'string',
-								'description' => 'Optional PHP code body to execute after the sandbox agent stack boots.',
-							),
-							'code_file'              => array(
-								'type'        => 'string',
-								'description' => 'Optional PHP file to execute after the sandbox agent stack boots.',
-							),
 							'wp'                     => array(
 								'type'        => 'string',
 								'description' => 'WordPress version passed to Playground. Defaults to trunk.',

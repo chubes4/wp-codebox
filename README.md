@@ -180,7 +180,7 @@ Useful options:
 - `--session-id <id>`: continue an existing sandbox conversation session.
 - `--max-turns <n>`: bound the agent loop.
 
-`--code` and `--code-file` still exist for operator/debug use after the agent stack boots. Product-facing task APIs should treat natural-language `--task` as the stable input shape and keep raw code execution gated away from untrusted frontend callers.
+`--code` and `--code-file` still exist on the CLI for operator/debug use after the agent stack boots. They are not accepted by the parent-site `wp-codebox/run-agent-task` ability.
 
 ### `agent-sandbox-batch`
 
@@ -227,6 +227,8 @@ The WordPress plugin registers parent-site abilities:
 - `wp-codebox/run-agent-task-batch`
 
 These abilities shell out to the local `wp-codebox` CLI, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
+
+`wp-codebox/run-agent-task` accepts task-shaped inputs only. It rejects raw `code` and `code_file` fields so frontend/chat callers cannot pass arbitrary PHP through the product ability path. Operators can still use CLI debug commands directly when they need raw PHP probes.
 
 Component paths can come from ability input, the `wp_codebox_component_paths` option, or the `wp_codebox_component_paths` filter.
 
@@ -287,7 +289,6 @@ WP Codebox does not own:
 
 ## Near-Term Gaps
 
-- Split raw operator/debug PHP execution away from product-facing task APIs.
 - Define canonical `patch.diff`, `changed-files.json`, content-addressed artifact IDs, and redaction guarantees.
 - Add list/get/discard/apply-approved artifact abilities to the WordPress plugin.
 - Define multi-user sandbox session lifecycle, retention, quotas, cancellation, and audit records.

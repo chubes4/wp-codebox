@@ -38,15 +38,14 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			return new WP_Error( 'wp_codebox_task_missing', 'task is required.', array( 'status' => 400 ) );
 		}
 
+		$raw_code_input = $this->reject_raw_code_input( $input );
+		if ( is_wp_error( $raw_code_input ) ) {
+			return $raw_code_input;
+		}
+
 		$paths = $this->resolve_component_paths( $input );
 		if ( is_wp_error( $paths ) ) {
 			return $paths;
-		}
-
-		$code      = trim( (string) ( $input['code'] ?? '' ) );
-		$code_file = $this->clean_path( (string) ( $input['code_file'] ?? '' ) );
-		if ( '' !== $code && '' !== $code_file ) {
-			return new WP_Error( 'wp_codebox_code_conflict', 'Use either code or code_file, not both.', array( 'status' => 400 ) );
 		}
 
 		$artifacts = $this->clean_path( (string) ( $input['artifacts_path'] ?? $this->default_artifacts_path() ) );
@@ -85,14 +84,6 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 		if ( ! empty( $input['max_turns'] ) ) {
 			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
-		}
-
-		if ( '' !== $code ) {
-			$command .= ' --code ' . escapeshellarg( $code );
-		}
-
-		if ( '' !== $code_file ) {
-			$command .= ' --code-file ' . escapeshellarg( $code_file );
 		}
 
 		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
@@ -292,6 +283,31 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		return function_exists( 'exec' ) && function_exists( 'shell_exec' );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return true|WP_Error */
+	private function reject_raw_code_input( array $input ): true|WP_Error {
+		foreach ( array( 'code', 'code_file' ) as $field ) {
+			if ( ! array_key_exists( $field, $input ) ) {
+				continue;
+			}
+
+			$value = $input[ $field ];
+			if ( null === $value || '' === trim( (string) $value ) ) {
+				continue;
+			}
+
+			return new WP_Error(
+				'wp_codebox_raw_code_forbidden',
+				'Raw PHP code inputs are not accepted by wp-codebox/run-agent-task. Use the operator CLI debug path for raw PHP execution.',
+				array(
+					'status' => 400,
+					'field'  => $field,
+				)
+			);
+		}
+
+		return true;
 	}
 
 	private function agent_slug( array $input ): string {
