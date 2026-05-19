@@ -2,6 +2,8 @@ import { createHash } from "node:crypto"
 import { copyFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { assertRuntimeCommandAllowed } from "@chubes4/wp-codebox-core"
+import { normalizeBlueprint, playgroundBlueprint, preferredVersionsForEnvironment } from "./blueprint.js"
+import { abilityInputFromArgs, abilityPhpCode, argValue, cleanWpCliOutput, isSafeEnvName, normalizePhpCode, phpBody, shellArgv, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
 import type {
   ArtifactBundle,
   ArtifactManifest,
@@ -733,154 +735,6 @@ function fileEntry(path: string, kind: ArtifactManifestFile["kind"], contentType
   return { path, kind, contentType }
 }
 
-function normalizeBlueprint(blueprint: unknown): { extraLibraries?: unknown; landingPage?: unknown; preferredVersions?: unknown; steps: unknown[] } {
-  if (!blueprint || typeof blueprint !== "object" || Array.isArray(blueprint)) {
-    return { steps: [] }
-  }
-
-  const candidate = blueprint as Record<string, unknown>
-  const steps = Array.isArray(candidate.steps) ? candidate.steps : []
-
-  return {
-    extraLibraries: candidate.extraLibraries,
-    landingPage: candidate.landingPage,
-    preferredVersions: candidate.preferredVersions,
-    steps,
-  }
-}
-
-function playgroundBlueprint(blueprint: unknown, policy: RuntimeCreateSpec["policy"]): unknown {
-  if (!policy.commands.includes("wordpress.wp-cli")) {
-    return blueprint
-  }
-
-  const base = !blueprint || typeof blueprint !== "object" || Array.isArray(blueprint) ? {} : blueprint as Record<string, unknown>
-  const extraLibraries = Array.isArray(base.extraLibraries) ? base.extraLibraries : []
-
-  return {
-    ...base,
-    extraLibraries: [...new Set([...extraLibraries, "wp-cli"])],
-  }
-}
-
-function wpCliCommandFromArgs(args: string[]): string {
-  const explicit = argValue(args, "command")
-  if (explicit) {
-    return explicit.trim()
-  }
-
-  return args.join(" ").trim()
-}
-
-function abilityInputFromArgs(args: string[]): unknown {
-  const raw = argValue(args, "input")
-  if (!raw) {
-    return {}
-  }
-
-  try {
-    return JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`wordpress.ability input must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
-  }
-}
-
-function abilityPhpCode(name: string, input: unknown): string {
-  return `wp_set_current_user( 1 );
-if ( ! function_exists( 'wp_get_ability' ) ) {
-    throw new RuntimeException( 'The WordPress Abilities API is not available in this runtime.' );
-}
-$ability = wp_get_ability( ${JSON.stringify(name)} );
-if ( ! $ability ) {
-    throw new RuntimeException( sprintf( 'Ability is not registered: %s', ${JSON.stringify(name)} ) );
-}
-$result = $ability->execute( json_decode( ${JSON.stringify(JSON.stringify(input))}, true ) );
-if ( is_wp_error( $result ) ) {
-    throw new RuntimeException( $result->get_error_message() );
-}
-echo wp_json_encode( array(
-    'command' => 'wordpress.ability',
-    'name' => ${JSON.stringify(name)},
-    'input' => json_decode( ${JSON.stringify(JSON.stringify(input))}, true ),
-    'result' => $result,
-), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );`
-}
-
-function shellArgv(command: string): string[] {
-  const args: string[] = []
-  let current = ""
-  let quote = ""
-
-  for (let index = 0; index < command.length; index++) {
-    const char = command[index]
-    if (!quote && /\s/.test(char)) {
-      if (current) {
-        args.push(current)
-        current = ""
-      }
-      continue
-    }
-
-    if ((char === "'" || char === '"') && (!quote || quote === char)) {
-      quote = quote ? "" : char
-      continue
-    }
-
-    if (char === "\\" && index + 1 < command.length) {
-      current += command[++index]
-      continue
-    }
-
-    current += char
-  }
-
-  if (quote) {
-    throw new Error("Unclosed quote in wordpress.wp-cli command")
-  }
-
-  if (current) {
-    args.push(current)
-  }
-
-  return args
-}
-
-function wpCliPhpScript(argv: string[]): string {
-  return `<?php
-putenv('SHELL_PIPE=0');
-$GLOBALS['argv'] = array_merge(array('/tmp/wp-cli.phar', '--path=/wordpress', '--no-color'), json_decode(${JSON.stringify(JSON.stringify(argv))}, true));
-if (!defined('STDIN')) {
-    define('STDIN', fopen('php://stdin', 'rb'));
-}
-if (!defined('STDOUT')) {
-    define('STDOUT', fopen('php://stdout', 'wb'));
-}
-if (!defined('STDERR')) {
-    define('STDERR', fopen('php://stderr', 'wb'));
-}
-require '/tmp/wp-cli.phar';
-`
-}
-
-function cleanWpCliOutput(output: string): string {
-  return output.replace(/^#!\/usr\/bin\/env php\r?\n/, "")
-}
-
-function preferredVersionsForEnvironment(
-  wpVersion: string | undefined,
-  baseBlueprint: { preferredVersions?: unknown },
-): unknown {
-  if (baseBlueprint.preferredVersions) {
-    return baseBlueprint.preferredVersions
-  }
-
-  if (!wpVersion) {
-    return undefined
-  }
-
-  return { wp: wpVersion }
-}
-
 function mountTargetPath(mount: MountSpec, relativePath: string): string {
   return `${mount.target.replace(/\/+$/, "")}/${relativePath}`
 }
@@ -978,22 +832,4 @@ function splitLines(text: string): string[] {
   }
 
   return text.replace(/\n$/, "").split("\n")
-}
-
-function argValue(args: string[], name: string): string | undefined {
-  const prefix = `${name}=`
-  const match = args.find((arg) => arg.startsWith(prefix))
-  return match?.slice(prefix.length)
-}
-
-function isSafeEnvName(name: string): boolean {
-  return /^[A-Z_][A-Z0-9_]*$/.test(name)
-}
-
-function normalizePhpCode(code: string): string {
-  return code.trimStart().startsWith("<?php") ? code : `<?php\n${code}`
-}
-
-function phpBody(code: string): string {
-  return code.trimStart().replace(/^<\?php\s*/, "")
 }
