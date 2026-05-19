@@ -23,11 +23,13 @@ Parent app, CI job, or WordPress control plane
 - Fan out several task descriptions into separate isolated sandboxes.
 - Produce artifact bundles that a parent product can review or consume later.
 
-## Packages
+## Repo Components
 
-- `@chubes4/wp-codebox-core`: backend-agnostic runtime interfaces and shared types.
-- `@chubes4/wp-codebox-playground`: WordPress Playground backend adapter.
-- `@chubes4/wp-codebox-cli`: `wp-codebox` CLI.
+These are local workspace components in this repo, not published packages yet:
+
+- `packages/runtime-core`: backend-agnostic runtime interfaces and shared types.
+- `packages/runtime-playground`: WordPress Playground backend adapter.
+- `packages/cli`: source for the local `wp-codebox` CLI used through `npm run wp-codebox`.
 - `packages/wordpress-plugin`: parent-site WordPress ability surface.
 
 ## Local Setup
