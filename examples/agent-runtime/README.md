@@ -18,4 +18,4 @@ npm run wp-codebox -- agent-runtime-probe \
   --json
 ```
 
-The preset mounts the plugins at their canonical slugs, uses WordPress `trunk` by default, activates the plugins in dependency order, and returns a JSON readiness packet. It intentionally does not require provider credentials or model calls.
+The preset mounts the plugins at their canonical slugs, uses WordPress `7.0` by default, activates the plugins in dependency order, and returns a JSON readiness packet. It intentionally does not require provider credentials or model calls.

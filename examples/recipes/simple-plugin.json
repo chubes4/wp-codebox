@@ -3,7 +3,7 @@
   "runtime": {
     "backend": "wordpress-playground",
     "name": "simple-plugin-lab",
-    "wp": "latest"
+    "wp": "7.0"
   },
   "inputs": {
     "mounts": [

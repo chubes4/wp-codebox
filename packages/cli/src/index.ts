@@ -97,6 +97,8 @@ const defaultPolicy: RuntimePolicy = {
   approvals: "never",
 }
 
+const DEFAULT_WORDPRESS_VERSION = "7.0"
+
 const secretEnvPolicy: RuntimePolicy = {
   ...defaultPolicy,
   secrets: "connector-scoped",
@@ -202,7 +204,7 @@ async function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): P
     mounts: agentRuntimeMounts(options),
     command: "wordpress.run-php",
     args: [`code=${agentRuntimeProbeCode(providerPluginMounts(options))}`],
-    wpVersion: options.wpVersion ?? "trunk",
+    wpVersion: options.wpVersion ?? DEFAULT_WORDPRESS_VERSION,
     artifactsDirectory: options.artifactsDirectory,
     ...await runSecretEnvOptions(options),
     json: options.json,
@@ -214,7 +216,7 @@ async function agentSandboxRunOptions(options: AgentSandboxRunOptions): Promise<
     mounts: agentRuntimeMounts(options),
     command: "wordpress.run-php",
     args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options), providerPluginMounts(options))}`],
-    wpVersion: options.wpVersion ?? "trunk",
+    wpVersion: options.wpVersion ?? DEFAULT_WORDPRESS_VERSION,
     artifactsDirectory: options.artifactsDirectory,
     ...await runSecretEnvOptions(options),
     json: options.json,
@@ -261,7 +263,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
         environment: {
           kind: "wordpress",
           name: recipe.runtime?.name ?? "wp-codebox-recipe",
-          version: recipe.runtime?.wp ?? "latest",
+          version: recipe.runtime?.wp ?? DEFAULT_WORDPRESS_VERSION,
           blueprint: recipe.runtime?.blueprint ?? { steps: [] },
         },
         policy: Object.keys(secretEnv).length > 0 ? { ...policy, secrets: "connector-scoped" } : policy,
@@ -615,7 +617,7 @@ async function run(options: RunOptions): Promise<RunOutput> {
         environment: {
           kind: "wordpress",
           name: "wp-codebox-cli",
-          version: options.wpVersion ?? "latest",
+          version: options.wpVersion ?? DEFAULT_WORDPRESS_VERSION,
           blueprint: { steps: [] },
         },
         policy: options.policy ?? defaultPolicy,
@@ -965,7 +967,7 @@ Options:
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
   --arg <key=value>    Command argument. Repeatable.
-  --wp <version>       WordPress version for Playground, e.g. latest, trunk, nightly, 6.9.
+  --wp <version>       WordPress version for Playground. Defaults to 7.0; accepts latest, trunk, nightly, or numeric versions.
   --artifacts <dir>    Artifact root directory.
   --policy <json|file> Runtime policy JSON or path to a JSON file.
   --json               Emit machine-readable JSON.

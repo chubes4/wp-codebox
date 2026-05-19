@@ -70,7 +70,7 @@ WP Codebox mounts the local plugin directory into WordPress Playground and boots
 
 `wordpress.run-php` accepts either `--arg code-file=<path>` or `--arg code=<php>`. It loads `/wordpress/wp-load.php` before running the supplied PHP so WordPress functions are available by default. Use `--arg bootstrap=none` for raw PHP execution without WordPress bootstrap.
 
-Use `--wp trunk`, `--wp nightly`, or a numeric WordPress version when a mounted plugin stack requires a version other than Playground's default.
+WP Codebox defaults Playground to WordPress `7.0` because its agent and AI plugin stacks require the modern WordPress AI surface. Use `--wp trunk`, `--wp nightly`, or another numeric WordPress version when a mounted plugin stack needs a different runtime.
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
 
@@ -92,7 +92,7 @@ Recipe shape:
   "runtime": {
     "backend": "wordpress-playground",
     "name": "simple-plugin-lab",
-    "wp": "latest"
+    "wp": "7.0"
   },
   "inputs": {
     "extra_plugins": [
