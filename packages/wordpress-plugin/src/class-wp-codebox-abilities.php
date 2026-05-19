@@ -26,6 +26,17 @@ final class WP_Codebox_Abilities {
 
 	private function register(): void {
 		$register_callback = function (): void {
+			$artifact_id_schema = array(
+				'artifact_id'    => array(
+					'type'        => 'string',
+					'description' => 'Artifact bundle id from manifest.json.',
+				),
+				'artifacts_path' => array(
+					'type'        => 'string',
+					'description' => 'Root directory containing WP Codebox artifact bundles.',
+				),
+			);
+
 			wp_register_ability(
 				'wp-codebox/run-agent-task',
 				array(
@@ -168,6 +179,92 @@ final class WP_Codebox_Abilities {
 					'meta'                => array( 'show_in_rest' => true ),
 				)
 			);
+
+			wp_register_ability(
+				'wp-codebox/list-artifacts',
+				array(
+					'label'               => 'List WP Codebox Artifacts',
+					'description'         => 'List artifact bundles under the configured WP Codebox artifact root.',
+					'category'            => 'wp-codebox',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'properties' => array(
+							'artifacts_path' => $artifact_id_schema['artifacts_path'],
+						),
+					),
+					'output_schema'       => array( 'type' => 'object' ),
+					'execute_callback'    => array( self::class, 'list_artifacts' ),
+					'permission_callback' => array( self::class, 'can_run_agent_task' ),
+					'meta'                => array( 'show_in_rest' => true ),
+				)
+			);
+
+			wp_register_ability(
+				'wp-codebox/get-artifact',
+				array(
+					'label'               => 'Get WP Codebox Artifact',
+					'description'         => 'Read one WP Codebox artifact bundle by id.',
+					'category'            => 'wp-codebox',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'required'   => array( 'artifact_id' ),
+						'properties' => $artifact_id_schema,
+					),
+					'output_schema'       => array( 'type' => 'object' ),
+					'execute_callback'    => array( self::class, 'get_artifact' ),
+					'permission_callback' => array( self::class, 'can_run_agent_task' ),
+					'meta'                => array( 'show_in_rest' => true ),
+				)
+			);
+
+			wp_register_ability(
+				'wp-codebox/discard-artifact',
+				array(
+					'label'               => 'Discard WP Codebox Artifact',
+					'description'         => 'Delete one WP Codebox artifact bundle from the configured artifact root.',
+					'category'            => 'wp-codebox',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'required'   => array( 'artifact_id' ),
+						'properties' => $artifact_id_schema,
+					),
+					'output_schema'       => array( 'type' => 'object' ),
+					'execute_callback'    => array( self::class, 'discard_artifact' ),
+					'permission_callback' => array( self::class, 'can_run_agent_task' ),
+					'meta'                => array( 'show_in_rest' => true ),
+				)
+			);
+
+			wp_register_ability(
+				'wp-codebox/apply-approved-artifact',
+				array(
+					'label'               => 'Apply Approved WP Codebox Artifact',
+					'description'         => 'Validate an approved canonical artifact patch and hand it to the configured apply-back adapter.',
+					'category'            => 'wp-codebox',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'required'   => array( 'artifact_id', 'approved_files' ),
+						'properties' => array_merge(
+							$artifact_id_schema,
+							array(
+								'approved_files' => array(
+									'type'        => 'array',
+									'description' => 'Explicit sandbox file paths approved by the parent-site reviewer.',
+									'items'       => array( 'type' => 'string' ),
+								),
+								'approver'       => array(
+									'type'        => 'string',
+									'description' => 'Parent-site approver principal for audit records.',
+								),
+							)
+						),
+					),
+					'output_schema'       => array( 'type' => 'object' ),
+					'execute_callback'    => array( self::class, 'apply_approved_artifact' ),
+					'permission_callback' => array( self::class, 'can_run_agent_task' ),
+					'meta'                => array( 'show_in_rest' => true ),
+				)
+			);
 		};
 
 		if ( function_exists( 'doing_action' ) && doing_action( 'wp_abilities_api_init' ) ) {
@@ -186,6 +283,26 @@ final class WP_Codebox_Abilities {
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	public static function run_agent_task_batch( array $input ): array|WP_Error {
 		return ( new WP_Codebox_Agent_Sandbox_Runner() )->run_batch( $input );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
+	public static function list_artifacts( array $input = array() ): array|WP_Error {
+		return ( new WP_Codebox_Artifacts() )->list( $input );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
+	public static function get_artifact( array $input ): array|WP_Error {
+		return ( new WP_Codebox_Artifacts() )->get( $input );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
+	public static function discard_artifact( array $input ): array|WP_Error {
+		return ( new WP_Codebox_Artifacts() )->discard( $input );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
+	public static function apply_approved_artifact( array $input ): array|WP_Error {
+		return ( new WP_Codebox_Artifacts() )->apply_approved( $input );
 	}
 
 	public static function can_run_agent_task(): bool {

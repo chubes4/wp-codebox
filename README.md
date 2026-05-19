@@ -231,6 +231,10 @@ The WordPress plugin registers parent-site abilities:
 
 - `wp-codebox/run-agent-task`
 - `wp-codebox/run-agent-task-batch`
+- `wp-codebox/list-artifacts`
+- `wp-codebox/get-artifact`
+- `wp-codebox/discard-artifact`
+- `wp-codebox/apply-approved-artifact`
 
 These abilities shell out to the local `wp-codebox` CLI, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
 
@@ -249,7 +253,7 @@ The CLI binary can come from ability input, the `wp_codebox_bin` option, or the 
 
 Data Machine Code is a mounted coding-tools component inside the sandbox. It provides workspace/file/GitHub tools to the sandboxed agent. WP Codebox owns the parent-site ability surface, sandbox lifecycle, and artifact capture boundary.
 
-Apply-back is intentionally not part of `run-agent-task`. Sandbox execution returns proposed outputs and evidence. Applying those outputs to a real site, opening a PR, exporting a package, approving files, or discarding artifacts should use separate reviewed abilities and policy.
+Apply-back is intentionally not part of `run-agent-task`. Sandbox execution returns proposed outputs and evidence. `list-artifacts`, `get-artifact`, and `discard-artifact` manage captured artifact bundles under the configured artifact root. `apply-approved-artifact` validates `artifact_id` plus an explicit `approved_files[]` list against canonical `changed-files.json`, reads the exact `patch.diff` the reviewer approved, and delegates to the `wp_codebox_apply_approved_artifact` filter. PR creation, direct deploy, package export, and bot identity policy live in adapters behind that reviewed boundary.
 
 ## Runtime Policy
 

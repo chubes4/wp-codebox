@@ -19,6 +19,7 @@ define( 'WP_CODEBOX_PLUGIN_VERSION', '0.1.0' );
 define( 'WP_CODEBOX_PLUGIN_PATH', plugin_dir_path( __FILE__ ) );
 
 require_once __DIR__ . '/src/class-wp-codebox-agent-sandbox-runner.php';
+require_once __DIR__ . '/src/class-wp-codebox-artifacts.php';
 require_once __DIR__ . '/src/class-wp-codebox-abilities.php';
 
 add_action( 'plugins_loaded', static function (): void {

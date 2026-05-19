@@ -38,10 +38,22 @@ function wp_register_ability( string $name, array $definition ): void {
 function doing_action( string $hook ): bool { return 'wp_abilities_api_init' === $hook; }
 function add_action( string $hook, callable $callback, int $priority = 10 ): void {}
 function current_user_can( string $capability ): bool { return 'manage_options' === $capability; }
-function apply_filters( string $hook, mixed $value ): mixed { return $GLOBALS['wp_codebox_filters'][ $hook ] ?? $value; }
+function apply_filters( string $hook, mixed $value, mixed ...$args ): mixed {
+	if ( ! array_key_exists( $hook, $GLOBALS['wp_codebox_filters'] ) ) {
+		return $value;
+	}
+
+	$filter = $GLOBALS['wp_codebox_filters'][ $hook ];
+	if ( is_callable( $filter ) ) {
+		return $filter( $value, ...$args );
+	}
+
+	return $filter;
+}
 function get_option( string $name, mixed $default = null ): mixed { return $default; }
 
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sandbox-runner.php';
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-artifacts.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-abilities.php';
 
 $root = sys_get_temp_dir() . '/wp-codebox-wordpress-plugin-' . getmypid();
@@ -78,6 +90,18 @@ $batch_ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-age
 $assert( 'run-agent-task-batch ability registered', is_array( $batch_ability ) );
 $assert( 'batch ability is REST visible', true === ( $batch_ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'batch ability requires tasks', array( 'tasks' ) === ( $batch_ability['input_schema']['required'] ?? array() ) );
+
+$artifact_abilities = array(
+	'wp-codebox/list-artifacts',
+	'wp-codebox/get-artifact',
+	'wp-codebox/discard-artifact',
+	'wp-codebox/apply-approved-artifact',
+);
+foreach ( $artifact_abilities as $artifact_ability_name ) {
+	$artifact_ability = $GLOBALS['wp_codebox_registered_abilities'][ $artifact_ability_name ] ?? null;
+	$assert( $artifact_ability_name . ' ability registered', is_array( $artifact_ability ) );
+	$assert( $artifact_ability_name . ' is REST visible', true === ( $artifact_ability['meta']['show_in_rest'] ?? false ) );
+}
 
 $GLOBALS['wp_codebox_filters']['wp_codebox_component_paths'] = array(
 	'agents_api'        => $root . '/agents-api',
@@ -171,6 +195,100 @@ $assert( 'missing task fails closed', is_wp_error( $missing_task ) && 'wp_codebo
 
 $missing_tasks = $runner->run_batch( array( 'artifacts_path' => $root . '/artifacts' ) );
 $assert( 'missing batch tasks fails closed', is_wp_error( $missing_tasks ) && 'wp_codebox_tasks_missing' === $missing_tasks->get_error_code() );
+
+$artifact_root = $root . '/artifact-store';
+$bundle_dir    = $artifact_root . '/runtime-test';
+mkdir( $bundle_dir . '/files', 0777, true );
+file_put_contents(
+	$bundle_dir . '/manifest.json',
+	json_encode(
+		array(
+			'id'        => 'artifact-bundle-test',
+			'createdAt' => '2026-05-19T00:00:00Z',
+			'files'     => array(
+				array(
+					'path'        => 'files/changed-files.json',
+					'kind'        => 'changed-files',
+					'contentType' => 'application/json',
+				),
+				array(
+					'path'        => 'files/patch.diff',
+					'kind'        => 'patch',
+					'contentType' => 'text/x-diff',
+				),
+			),
+		),
+		JSON_PRETTY_PRINT
+	) . "\n"
+);
+file_put_contents( $bundle_dir . '/metadata.json', json_encode( array( 'artifacts' => array( 'patch' => 'files/patch.diff' ) ), JSON_PRETTY_PRINT ) . "\n" );
+file_put_contents(
+	$bundle_dir . '/files/changed-files.json',
+	json_encode(
+		array(
+			'schema' => 'wp-codebox/changed-files/v1',
+			'files'  => array(
+				array(
+					'path'         => '/wordpress/wp-content/plugins/example/generated.txt',
+					'status'       => 'added',
+					'mountIndex'   => 0,
+					'mountTarget'  => '/wordpress/wp-content/plugins/example',
+					'relativePath' => 'generated.txt',
+					'patchPath'    => 'files/diffs/mount-0.patch',
+				),
+			),
+		),
+		JSON_PRETTY_PRINT
+	) . "\n"
+);
+file_put_contents( $bundle_dir . '/files/patch.diff', "diff --git a/generated.txt b/generated.txt\n+cooked\n" );
+
+$artifacts = new WP_Codebox_Artifacts();
+$listed    = $artifacts->list( array( 'artifacts_path' => $artifact_root ) );
+$assert( 'artifact listing succeeds', ! is_wp_error( $listed ) && 1 === count( $listed['artifacts'] ?? array() ) );
+
+$read_artifact = $artifacts->get(
+	array(
+		'artifacts_path' => $artifact_root,
+		'artifact_id'    => 'artifact-bundle-test',
+	)
+);
+$assert( 'artifact get returns canonical changed files', ! is_wp_error( $read_artifact ) && 'wp-codebox/changed-files/v1' === ( $read_artifact['artifact']['changed_files']['schema'] ?? '' ) );
+
+$GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function ( mixed $value, array $payload ): array {
+	return array(
+		'adapter'       => 'test-adapter',
+		'artifact_id'   => $payload['artifact_id'],
+		'patch_sha256'  => $payload['patch_sha256'],
+		'patch_contains' => str_contains( $payload['patch'], 'cooked' ),
+	);
+};
+$applied = $artifacts->apply_approved(
+	array(
+		'artifacts_path'  => $artifact_root,
+		'artifact_id'     => 'artifact-bundle-test',
+		'approved_files'  => array( '/wordpress/wp-content/plugins/example/generated.txt' ),
+		'approver'        => 'site-user:1',
+	)
+);
+$assert( 'approved artifact apply delegates exact patch', ! is_wp_error( $applied ) && true === ( $applied['result']['patch_contains'] ?? false ) && hash( 'sha256', "diff --git a/generated.txt b/generated.txt\n+cooked\n" ) === ( $applied['patch_sha256'] ?? '' ) );
+
+$unknown_apply = $artifacts->apply_approved(
+	array(
+		'artifacts_path' => $artifact_root,
+		'artifact_id'    => 'artifact-bundle-test',
+		'approved_files' => array( '/wordpress/wp-content/plugins/example/unknown.txt' ),
+	)
+);
+$assert( 'approved artifact rejects unknown files', is_wp_error( $unknown_apply ) && 'wp_codebox_approved_files_invalid' === $unknown_apply->get_error_code() );
+
+$discarded = $artifacts->discard(
+	array(
+		'artifacts_path' => $artifact_root,
+		'artifact_id'    => 'artifact-bundle-test',
+	)
+);
+$assert( 'artifact discard removes bundle inside root', ! is_wp_error( $discarded ) && ! is_dir( $bundle_dir ) );
 
 if ( ! empty( $failures ) ) {
 	echo "\nFAIL: " . count( $failures ) . " assertion(s) failed out of {$total}\n";
