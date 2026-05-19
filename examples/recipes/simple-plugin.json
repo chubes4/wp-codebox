@@ -1,0 +1,30 @@
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": {
+    "backend": "wordpress-playground",
+    "name": "simple-plugin-lab",
+    "wp": "latest"
+  },
+  "inputs": {
+    "mounts": [
+      {
+        "source": "../simple-plugin",
+        "target": "/wordpress/wp-content/plugins/simple-plugin",
+        "mode": "readwrite"
+      }
+    ]
+  },
+  "workflow": {
+    "steps": [
+      {
+        "command": "wordpress.run-php",
+        "args": [
+          "code-file=./examples/simple-plugin/probe.php"
+        ]
+      }
+    ]
+  },
+  "artifacts": {
+    "directory": "./artifacts"
+  }
+}

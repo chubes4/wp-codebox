@@ -74,6 +74,52 @@ Use `--wp trunk`, `--wp nightly`, or a numeric WordPress version when a mounted 
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
 
+## Workspace Recipes
+
+Recipes package a repeatable sandbox setup and workflow as JSON. They are the portable lab contract for workshops, contributor-day environments, isolated testing, evals, and reproducible bug kits.
+
+```bash
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/simple-plugin.json \
+  --json
+```
+
+Recipe shape:
+
+```json
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": {
+    "backend": "wordpress-playground",
+    "name": "simple-plugin-lab",
+    "wp": "latest"
+  },
+  "inputs": {
+    "mounts": [
+      {
+        "source": "../simple-plugin",
+        "target": "/wordpress/wp-content/plugins/simple-plugin",
+        "mode": "readwrite"
+      }
+    ],
+    "secretEnv": []
+  },
+  "workflow": {
+    "steps": [
+      {
+        "command": "wordpress.run-php",
+        "args": ["code-file=./examples/simple-plugin/probe.php"]
+      }
+    ]
+  },
+  "artifacts": {
+    "directory": "./artifacts"
+  }
+}
+```
+
+The first recipe schema intentionally maps to existing runtime primitives: WordPress version, mounted inputs, allow-listed environment variable names, workflow steps, and artifact directory. Relative mount paths resolve from the recipe file location. Workflow commands are used as the runtime command allow-list for that run.
+
 ## Artifact Bundles
 
 Artifact capture is owned by WP Codebox because the runtime boundary knows what was mounted, what executed, and what must survive teardown. Agent frameworks and workspaces can mutate files inside the sandbox; WP Codebox captures the result from outside the sandbox before disposal.

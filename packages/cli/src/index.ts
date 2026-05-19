@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises"
-import { basename, resolve } from "node:path"
-import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy } from "@chubes4/wp-codebox-core"
+import { basename, dirname, resolve } from "node:path"
+import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
 interface RunOptions {
@@ -26,6 +26,23 @@ interface RunOutput {
     message: string
     code?: string
   }
+}
+
+interface RecipeRunOptions {
+  recipePath: string
+  artifactsDirectory?: string
+  json: boolean
+}
+
+interface RecipeRunOutput {
+  success: boolean
+  schema: "wp-codebox/recipe-run/v1"
+  recipePath?: string
+  runtime?: RuntimeInfo
+  executions: ExecutionResult[]
+  artifacts?: ArtifactBundle
+  logs?: string[]
+  error?: RunOutput["error"]
 }
 
 interface AgentRuntimeProbeOptions {
@@ -91,6 +108,22 @@ async function main(args: string[]): Promise<number> {
   if (!command || command === "help" || command === "--help" || command === "-h") {
     printHelp()
     return command ? 0 : 1
+  }
+
+  if (command === "recipe-run") {
+    const options = parseRecipeRunOptions(args)
+    const execute = () => runRecipe(options)
+
+    if (!options.json) {
+      const output = await execute()
+      printRecipeHumanOutput(output)
+      return output.success ? 0 : 1
+    }
+
+    const { result, logs } = await captureStdout(execute)
+    const output = logs.length > 0 ? { ...result, logs } : result
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    return output.success ? 0 : 1
   }
 
   if (command === "agent-runtime-probe") {
@@ -208,6 +241,86 @@ async function runAgentSandboxBatch(options: AgentSandboxBatchOptions): Promise<
     completed: runs.length - failed,
     failed,
     runs,
+  }
+}
+
+async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
+  const recipePath = resolve(options.recipePath)
+  const recipeDirectory = dirname(recipePath)
+  const recipe = parseWorkspaceRecipe(await readFile(recipePath, "utf8"), recipePath)
+  const policy = recipePolicy(recipe)
+  const secretEnv = resolveSecretEnv(recipe.inputs?.secretEnv ?? [])
+  let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined
+  const executions: ExecutionResult[] = []
+  let artifacts: ArtifactBundle | undefined
+
+  try {
+    runtime = await createRuntime(
+      {
+        backend: recipe.runtime?.backend ?? "wordpress-playground",
+        environment: {
+          kind: "wordpress",
+          name: recipe.runtime?.name ?? "wp-codebox-recipe",
+          version: recipe.runtime?.wp ?? "latest",
+          blueprint: recipe.runtime?.blueprint ?? { steps: [] },
+        },
+        policy: Object.keys(secretEnv).length > 0 ? { ...policy, secrets: "connector-scoped" } : policy,
+        secretEnv,
+        artifactsDirectory: options.artifactsDirectory ?? recipe.artifacts?.directory,
+      },
+      createPlaygroundRuntimeBackend(),
+    )
+
+    for (const mount of recipe.inputs?.mounts ?? []) {
+      await runtime.mount({
+        type: "directory",
+        source: resolve(recipeDirectory, mount.source),
+        target: mount.target,
+        mode: mount.mode ?? "readwrite",
+      })
+    }
+
+    for (const step of recipe.workflow.steps) {
+      executions.push(await runtime.execute({ command: step.command, args: step.args ?? [] }))
+    }
+
+    await runtime.observe({ type: "runtime-info" })
+    await runtime.observe({ type: "mounts" })
+    artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true })
+    await runtime.destroy()
+
+    return {
+      success: true,
+      schema: "wp-codebox/recipe-run/v1",
+      recipePath,
+      runtime: await runtime.info(),
+      executions,
+      artifacts,
+    }
+  } catch (error) {
+    if (runtime) {
+      try {
+        artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true })
+      } catch {
+        // Preserve the original failure as the CLI result.
+      }
+
+      try {
+        await runtime.destroy()
+      } catch {
+        // Preserve the original failure as the CLI result.
+      }
+    }
+
+    return {
+      success: false,
+      schema: "wp-codebox/recipe-run/v1",
+      recipePath,
+      ...(runtime ? { runtime: await runtime.info() } : {}),
+      executions,
+      ...(artifacts ? { artifacts } : {}),
+      error: serializeError(error),
+    }
   }
 }
 
@@ -596,6 +709,84 @@ async function parseRunOptions(args: string[]): Promise<RunOptions> {
   return options
 }
 
+function parseRecipeRunOptions(args: string[]): RecipeRunOptions {
+  const options: Partial<RecipeRunOptions> = { json: false }
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+
+    if (arg === "--json") {
+      options.json = true
+      continue
+    }
+
+    const [name, inlineValue] = arg.split("=", 2)
+    const value = inlineValue ?? args[++index]
+
+    if (!name.startsWith("--") || value === undefined) {
+      throw new Error(`Invalid argument: ${arg}`)
+    }
+
+    switch (name) {
+      case "--recipe":
+        options.recipePath = value
+        break
+      case "--artifacts":
+        options.artifactsDirectory = value
+        break
+      default:
+        throw new Error(`Unknown option: ${name}`)
+    }
+  }
+
+  if (!options.recipePath) {
+    throw new Error("Missing required option: --recipe")
+  }
+
+  return options as RecipeRunOptions
+}
+
+function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe {
+  const recipe = JSON.parse(raw) as WorkspaceRecipe
+
+  if (recipe.schema !== "wp-codebox/workspace-recipe/v1") {
+    throw new Error(`Unsupported recipe schema in ${recipePath}`)
+  }
+
+  if (!recipe.workflow || !Array.isArray(recipe.workflow.steps) || recipe.workflow.steps.length === 0) {
+    throw new Error(`Recipe must include at least one workflow step: ${recipePath}`)
+  }
+
+  for (const step of recipe.workflow.steps) {
+    if (!step || typeof step.command !== "string" || step.command === "") {
+      throw new Error(`Recipe workflow steps must include a command: ${recipePath}`)
+    }
+
+    if (step.args && !Array.isArray(step.args)) {
+      throw new Error(`Recipe workflow step args must be arrays: ${recipePath}`)
+    }
+  }
+
+  for (const mount of recipe.inputs?.mounts ?? []) {
+    if (!mount.source || !mount.target) {
+      throw new Error(`Recipe mounts must include source and target: ${recipePath}`)
+    }
+
+    if (mount.mode && mount.mode !== "readonly" && mount.mode !== "readwrite") {
+      throw new Error(`Recipe mount mode must be readonly or readwrite: ${recipePath}`)
+    }
+  }
+
+  return recipe
+}
+
+function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
+  return {
+    ...defaultPolicy,
+    commands: [...new Set(recipe.workflow.steps.map((step) => step.command))],
+  }
+}
+
 function parseMount(value: string): RunOptions["mounts"][number] {
   const [source, target, mode = "readwrite"] = value.split(":")
 
@@ -661,6 +852,18 @@ function printHumanOutput(output: RunOutput): void {
   console.log(`Artifacts: ${output.artifacts?.directory ?? "none"}`)
 }
 
+function printRecipeHumanOutput(output: RecipeRunOutput): void {
+  if (!output.success) {
+    console.error(output.error?.message ?? "WP Codebox recipe failed")
+    return
+  }
+
+  console.log("WP Codebox recipe")
+  console.log(`Runtime: ${output.runtime?.backend ?? "unknown"}`)
+  console.log(`Steps: ${output.executions.length}`)
+  console.log(`Artifacts: ${output.artifacts?.directory ?? "none"}`)
+}
+
 function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
   console.log("WP Codebox batch")
   console.log(`Runs: ${output.completed}/${output.total} completed`)
@@ -675,12 +878,14 @@ function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
 
 function printHelp(): void {
   console.log(`Usage:
+  wp-codebox recipe-run --recipe <path> [options]
   wp-codebox run --mount <host>:<vfs> --command <id> [options]
   wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> [options]
   wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [options]
   wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [--task <text> ...] [options]
 
 Options:
+  --recipe <path>     Workspace recipe JSON file for recipe-run.
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
   --arg <key=value>    Command argument. Repeatable.

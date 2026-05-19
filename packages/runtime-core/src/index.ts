@@ -50,6 +50,37 @@ export interface RuntimeCreateSpec {
   secretEnv?: Record<string, string>
 }
 
+export interface WorkspaceRecipeMount {
+  source: string
+  target: string
+  mode?: "readonly" | "readwrite"
+}
+
+export interface WorkspaceRecipeStep {
+  command: string
+  args?: string[]
+}
+
+export interface WorkspaceRecipe {
+  schema: "wp-codebox/workspace-recipe/v1"
+  runtime?: {
+    backend?: RuntimeBackendKind
+    name?: string
+    wp?: string
+    blueprint?: unknown
+  }
+  inputs?: {
+    mounts?: WorkspaceRecipeMount[]
+    secretEnv?: string[]
+  }
+  workflow: {
+    steps: WorkspaceRecipeStep[]
+  }
+  artifacts?: {
+    directory?: string
+  }
+}
+
 export interface RuntimeInfo {
   id: string
   backend: RuntimeBackendKind
