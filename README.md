@@ -148,6 +148,16 @@ Recipe shape:
 
 The first recipe schema intentionally maps to existing runtime primitives: WordPress version, seeded workspaces, mounted inputs, extra WordPress plugins, allow-listed environment variable names, workflow steps, and artifact directory. Relative mount paths, directory workspace seeds, and `extra_plugins` sources resolve from the recipe file location. Workflow commands are used as the runtime command allow-list for that run.
 
+Validate a recipe without launching Playground:
+
+```bash
+npm run wp-codebox -- recipe validate \
+  --recipe ./examples/recipes/simple-plugin.json \
+  --json
+```
+
+`recipe validate` checks the recipe schema, source paths, extra plugin entrypoints, workspace seeds, supported workflow commands, JSON ability inputs, and command arguments before a sandbox is created.
+
 `workspaces` create disposable readwrite directories before Playground boots and mount them into WordPress. Scaffold seeds start from a minimal plugin or theme; directory seeds copy an existing checkout or fixture into the disposable workspace. WP Codebox captures readwrite workspace files into the artifact bundle after workflow steps mutate them.
 
 Supported workspace seeds:
