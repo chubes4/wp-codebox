@@ -10,6 +10,7 @@ import type {
   ArtifactManifestFile,
   ArtifactReview,
   ArtifactSpec,
+  ArtifactTestResults,
   ExecutionResult,
   ExecutionSpec,
   LifecycleEvent,
@@ -283,6 +284,7 @@ class PlaygroundRuntime implements Runtime {
     const diffsPath = join(filesDirectory, "diffs.json")
     const changedFilesPath = join(filesDirectory, "changed-files.json")
     const patchPath = join(filesDirectory, "patch.diff")
+    const testResultsPath = join(filesDirectory, "test-results.json")
     const reviewPath = join(filesDirectory, "review.json")
 
     const runtime = await this.info()
@@ -306,18 +308,19 @@ class PlaygroundRuntime implements Runtime {
       context: this.spec.metadata ?? {},
       spec,
     }
-
     this.recordEvent("runtime.artifacts.collected", {
       id: bundleId,
       directory: this.artifactRoot,
       createdAt,
       spec,
     })
+    const testResults = this.buildTestResults()
     const review = this.buildArtifactReview(bundleId, createdAt, changedFiles, patch, contentDigest)
     const reviewJson = `${JSON.stringify(review, null, 2)}\n`
     const artifactFiles = {
       changedFiles: relative(this.artifactRoot, changedFilesPath),
       patch: relative(this.artifactRoot, patchPath),
+      testResults: relative(this.artifactRoot, testResultsPath),
       review: relative(this.artifactRoot, reviewPath),
       mountDiffs: relative(this.artifactRoot, diffsPath),
     }
@@ -340,6 +343,7 @@ class PlaygroundRuntime implements Runtime {
       fileEntry(diffsPath, "mount-diffs", "application/json"),
       fileEntry(changedFilesPath, "changed-files", "application/json"),
       fileEntry(patchPath, "patch", "text/x-diff"),
+      fileEntry(testResultsPath, "test-results", "application/json"),
       fileEntry(reviewPath, "review", "application/json"),
       ...mountDiffs.map((diff) => fileEntry(join(this.artifactRoot, diff.artifactPath), "diff", "text/x-diff")),
       ...capturedMounts.files.map((file) =>
@@ -379,6 +383,7 @@ class PlaygroundRuntime implements Runtime {
     await writeFile(diffsPath, `${JSON.stringify(mountDiffs, null, 2)}\n`)
     await writeFile(changedFilesPath, changedFilesJson)
     await writeFile(patchPath, patch)
+    await writeFile(testResultsPath, `${JSON.stringify(testResults, null, 2)}\n`)
     await writeFile(reviewPath, reviewJson)
 
     return {
@@ -398,6 +403,7 @@ class PlaygroundRuntime implements Runtime {
       diffsPath,
       changedFilesPath,
       patchPath,
+      testResultsPath,
       reviewPath,
       contentDigest,
       createdAt,
@@ -484,8 +490,34 @@ class PlaygroundRuntime implements Runtime {
         patchSha256: createHash("sha256").update(patch).digest("hex"),
         artifactContentDigest: contentDigest,
         changedFiles: "files/changed-files.json",
+        testResults: "files/test-results.json",
       },
       riskFlags: [],
+    }
+  }
+
+  private buildTestResults(): ArtifactTestResults {
+    return {
+      schema: "wp-codebox/test-results/v1",
+      status: "unknown",
+      summary: {
+        total: 0,
+        passed: 0,
+        failed: 0,
+        skipped: 0,
+        unknown: 0,
+      },
+      suites: [],
+      rawLogReferences: [
+        {
+          path: "commands.jsonl",
+          kind: "commands-jsonl",
+        },
+        {
+          path: "logs/commands.log",
+          kind: "commands-log",
+        },
+      ],
     }
   }
 

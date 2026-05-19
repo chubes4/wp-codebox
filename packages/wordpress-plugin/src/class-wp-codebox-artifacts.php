@@ -242,6 +242,7 @@ final class WP_Codebox_Artifacts {
 			'metadata'      => $this->resolve_artifact_file( $directory, 'metadata.json' ),
 			'changed_files' => $this->resolve_artifact_file( $directory, 'files/changed-files.json' ),
 			'patch'         => $this->resolve_artifact_file( $directory, 'files/patch.diff' ),
+			'test_results'  => $this->resolve_artifact_file( $directory, 'files/test-results.json' ),
 			'review'        => $this->resolve_artifact_file( $directory, 'files/review.json' ),
 		);
 
@@ -253,6 +254,7 @@ final class WP_Codebox_Artifacts {
 			'paths'             => $paths,
 			'has_patch'         => is_file( $paths['patch'] ),
 			'has_changed_files' => is_file( $paths['changed_files'] ),
+			'has_test_results'  => is_file( $paths['test_results'] ),
 			'has_review'        => is_file( $paths['review'] ),
 		);
 
@@ -262,12 +264,16 @@ final class WP_Codebox_Artifacts {
 
 		$metadata      = is_file( $paths['metadata'] ) ? $this->read_json_file( $paths['metadata'] ) : array();
 		$changed_files = is_file( $paths['changed_files'] ) ? $this->read_json_file( $paths['changed_files'] ) : array();
+		$test_results  = is_file( $paths['test_results'] ) ? $this->read_json_file( $paths['test_results'] ) : array();
 		$review        = is_file( $paths['review'] ) ? $this->read_json_file( $paths['review'] ) : array();
 		if ( is_wp_error( $metadata ) ) {
 			return $metadata;
 		}
 		if ( is_wp_error( $changed_files ) ) {
 			return $changed_files;
+		}
+		if ( is_wp_error( $test_results ) ) {
+			return $test_results;
 		}
 		if ( is_wp_error( $review ) ) {
 			return $review;
@@ -295,6 +301,7 @@ final class WP_Codebox_Artifacts {
 		$bundle['manifest']      = $manifest;
 		$bundle['metadata']      = $metadata;
 		$bundle['changed_files'] = $changed_files;
+		$bundle['test_results']  = $test_results;
 		$bundle['review']        = $review;
 
 		return $bundle;

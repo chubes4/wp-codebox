@@ -77,7 +77,8 @@ Expected shape:
     "capturedMountsPath": "./artifacts/runtime-.../files/mounted-files.json",
     "diffsPath": "./artifacts/runtime-.../files/diffs.json",
     "changedFilesPath": "./artifacts/runtime-.../files/changed-files.json",
-    "patchPath": "./artifacts/runtime-.../files/patch.diff"
+    "patchPath": "./artifacts/runtime-.../files/patch.diff",
+    "testResultsPath": "./artifacts/runtime-.../files/test-results.json"
   }
 }
 ```
@@ -219,12 +220,30 @@ Current bundles include:
 - `files/mounted-files.json`: captured readwrite mount files with size, SHA-256, target path, and replayability metadata.
 - `files/changed-files.json`: canonical changed-files manifest for review and apply-back consumers.
 - `files/patch.diff`: canonical combined text patch for changed readwrite mounts that declare a baseline.
+- `files/test-results.json`: normalized test-results artifact with schema, summary counts, suites, and raw log references. When WP Codebox has not run test-aware commands, the artifact is present with `status: "unknown"`, zero counts, an empty `suites` array, and pointers to raw command logs instead of inferred pass/fail data.
 - `files/review.json`: frontend-oriented review payload with summary, progress labels, changed file labels, evidence links, and approval actions.
 - `files/diffs.json`: diff index for readwrite mounts that declare a baseline.
 - `files/diffs/<mount>.patch`: unified text diff from a seeded baseline to the sandbox output.
 - `files/mounts/<index>/...`: copied file contents from readwrite mounts.
 
-`metadata.json` points to the canonical changed-files, patch, review, and mount-diff artifact paths under `artifacts`. `files/diffs/<mount>.patch` remains available for per-mount detail; `files/patch.diff` is the combined review/apply-back patch surface.
+`metadata.json` points to the canonical changed-files, patch, test-results, review, and mount-diff artifact paths under `artifacts`. `files/diffs/<mount>.patch` remains available for per-mount detail; `files/patch.diff` is the combined review/apply-back patch surface.
+
+### `files/test-results.json`
+
+`files/test-results.json` is the normalized contract for future test-aware commands. The artifact exists even when no command produced structured test output, so artifact consumers can read one stable path and treat `status: "unknown"` as "no structured test result was captured."
+
+```json
+{
+  "schema": "wp-codebox/test-results/v1",
+  "status": "unknown",
+  "summary": { "total": 0, "passed": 0, "failed": 0, "skipped": 0, "unknown": 0 },
+  "suites": [],
+  "rawLogReferences": [
+    { "path": "commands.jsonl", "kind": "commands-jsonl" },
+    { "path": "logs/commands.log", "kind": "commands-log" }
+  ]
+}
+```
 
 Artifact bundle ids are content-addressed for the apply-back contract. The runtime writes `manifest.id` as `artifact-bundle-sha256-<digest>`, where `<digest>` is SHA-256 over the exact bytes of `files/changed-files.json` and `files/patch.diff` with the `wp-codebox/artifact-content/v1` domain separator. The same value is exposed as `manifest.contentDigest.value`, `metadata.contentDigest.value`, the CLI `artifacts.contentDigest` field, and `files/review.json` evidence. Approval and apply-back consumers must recompute it before trusting an approved artifact.
 
@@ -262,7 +281,8 @@ Artifact bundle ids are content-addressed for the apply-back contract. The runti
     "patch": "files/patch.diff",
     "patchSha256": "...",
     "artifactContentDigest": "...",
-    "changedFiles": "files/changed-files.json"
+    "changedFiles": "files/changed-files.json",
+    "testResults": "files/test-results.json"
   },
   "riskFlags": []
 }
@@ -270,7 +290,7 @@ Artifact bundle ids are content-addressed for the apply-back contract. The runti
 
 Review actions are declarative. Frontends call `wp-codebox/apply-approved-artifact` with `artifact_id` and an explicit `approved_files[]` list for approve actions, call `wp-codebox/discard-artifact` for discard, and start a new sandbox task for iterate/request-changes flows.
 
-Binary files and oversized files are copied when allowed by capture limits but are not embedded into `blueprint.after.json`. Database exports, option diffs, uploaded media, active plugin/theme state, screenshots, normalized test results, and redaction guarantees are still future artifact targets.
+Binary files and oversized files are copied when allowed by capture limits but are not embedded into `blueprint.after.json`. Database exports, option diffs, uploaded media, active plugin/theme state, screenshots, parsed test command output, and redaction guarantees are still future artifact targets.
 
 ## WordPress Plugin
 
@@ -370,7 +390,7 @@ WP Codebox does not own:
 - Define redaction guarantees.
 - Define multi-user sandbox session lifecycle, retention, quotas, cancellation, and audit records.
 - Define reviewed apply-back adapters for bot-authored PRs, direct apply, and package export.
-- Add visual previews, normalized test results, and richer risk flags to frontend review payloads.
+- Add visual previews, parsed test command output, and richer risk flags to frontend review payloads.
 
 ## Development Notes
 

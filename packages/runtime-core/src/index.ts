@@ -210,7 +210,17 @@ export interface ArtifactSpec {
 
 export interface ArtifactManifestFile {
   path: string
-  kind: "manifest" | "metadata" | "events" | "commands" | "observations" | "log" | "mounts" | "file" | (string & {})
+  kind:
+    | "manifest"
+    | "metadata"
+    | "events"
+    | "commands"
+    | "observations"
+    | "log"
+    | "mounts"
+    | "file"
+    | "test-results"
+    | (string & {})
   contentType: string
 }
 
@@ -280,8 +290,39 @@ export interface ArtifactReview {
     patchSha256: string
     artifactContentDigest: string
     changedFiles: string
+    testResults?: string
   }
   riskFlags: string[]
+}
+
+export interface ArtifactTestResultsRawLogReference {
+  path: string
+  kind: string
+}
+
+export interface ArtifactTestResultsSuite {
+  name: string
+  status: "passed" | "failed" | "skipped" | "unknown"
+  tests: number
+  passed: number
+  failed: number
+  skipped: number
+  unknown: number
+  rawLogReferences?: ArtifactTestResultsRawLogReference[]
+}
+
+export interface ArtifactTestResults {
+  schema: "wp-codebox/test-results/v1"
+  status: "passed" | "failed" | "skipped" | "unknown"
+  summary: {
+    total: number
+    passed: number
+    failed: number
+    skipped: number
+    unknown: number
+  }
+  suites: ArtifactTestResultsSuite[]
+  rawLogReferences: ArtifactTestResultsRawLogReference[]
 }
 
 export interface ArtifactBundle {
@@ -301,6 +342,7 @@ export interface ArtifactBundle {
   diffsPath: string
   changedFilesPath: string
   patchPath: string
+  testResultsPath: string
   reviewPath: string
   contentDigest: string
   createdAt: string

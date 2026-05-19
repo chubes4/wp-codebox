@@ -267,6 +267,11 @@ file_put_contents(
 					'contentType' => 'text/x-diff',
 				),
 				array(
+					'path'        => 'files/test-results.json',
+					'kind'        => 'test-results',
+					'contentType' => 'application/json',
+				),
+				array(
 					'path'        => 'files/review.json',
 					'kind'        => 'review',
 					'contentType' => 'application/json',
@@ -279,6 +284,30 @@ file_put_contents(
 file_put_contents( $bundle_dir . '/metadata.json', json_encode( array( 'artifacts' => array( 'patch' => 'files/patch.diff' ) ), JSON_PRETTY_PRINT ) . "\n" );
 file_put_contents( $bundle_dir . '/files/changed-files.json', $changed_files_json );
 file_put_contents( $bundle_dir . '/files/patch.diff', $patch_diff );
+file_put_contents(
+	$bundle_dir . '/files/test-results.json',
+	json_encode(
+		array(
+			'schema'           => 'wp-codebox/test-results/v1',
+			'status'           => 'unknown',
+			'summary'          => array(
+				'total'   => 0,
+				'passed'  => 0,
+				'failed'  => 0,
+				'skipped' => 0,
+				'unknown' => 0,
+			),
+			'suites'           => array(),
+			'rawLogReferences' => array(
+				array(
+					'path' => 'logs/commands.log',
+					'kind' => 'commands-log',
+				),
+			),
+		),
+		JSON_PRETTY_PRINT
+	) . "\n"
+);
 file_put_contents(
 	$bundle_dir . '/files/review.json',
 	json_encode(
@@ -301,6 +330,7 @@ file_put_contents(
 $artifacts = new WP_Codebox_Artifacts();
 $listed    = $artifacts->list( array( 'artifacts_path' => $artifact_root ) );
 $assert( 'artifact listing succeeds', ! is_wp_error( $listed ) && 1 === count( $listed['artifacts'] ?? array() ) );
+$assert( 'artifact listing detects test results', ! is_wp_error( $listed ) && true === ( $listed['artifacts'][0]['has_test_results'] ?? false ) );
 
 $read_artifact = $artifacts->get(
 	array(
@@ -309,6 +339,7 @@ $read_artifact = $artifacts->get(
 	)
 );
 $assert( 'artifact get returns canonical changed files', ! is_wp_error( $read_artifact ) && 'wp-codebox/changed-files/v1' === ( $read_artifact['artifact']['changed_files']['schema'] ?? '' ) );
+$assert( 'artifact get returns test results', ! is_wp_error( $read_artifact ) && 'wp-codebox/test-results/v1' === ( $read_artifact['artifact']['test_results']['schema'] ?? '' ) );
 $assert( 'artifact get returns review payload', ! is_wp_error( $read_artifact ) && 'wp-codebox/artifact-review/v1' === ( $read_artifact['artifact']['review']['schema'] ?? '' ) );
 $assert( 'artifact get verifies content digest', ! is_wp_error( $read_artifact ) && $content_digest === ( $read_artifact['artifact']['content_digest'] ?? '' ) );
 
