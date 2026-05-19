@@ -12,6 +12,7 @@ final class WP_Codebox_Artifacts {
 	private const LIST_SCHEMA  = 'wp-codebox/artifact-list/v1';
 	private const GET_SCHEMA   = 'wp-codebox/artifact/v1';
 	private const APPLY_SCHEMA = 'wp-codebox/artifact-apply/v1';
+	private const APPLY_AUDIT_SCHEMA = 'wp-codebox/apply-audit/v1';
 	private const CONTENT_DIGEST_PREFIX = "wp-codebox/artifact-content/v1\nfiles/changed-files.json\n";
 	private const CONTENT_DIGEST_SEPARATOR = "\nfiles/patch.diff\n";
 
@@ -91,6 +92,11 @@ final class WP_Codebox_Artifacts {
 			return $bundle;
 		}
 
+		$root = $this->artifact_root( $input );
+		if ( is_wp_error( $root ) ) {
+			return $root;
+		}
+
 		$approved_files = $this->approved_files( $input );
 		if ( empty( $approved_files ) ) {
 			return new WP_Error( 'wp_codebox_approved_files_missing', 'approved_files must include at least one sandbox path.', array( 'status' => 400 ) );
@@ -145,12 +151,16 @@ final class WP_Codebox_Artifacts {
 
 		$result = apply_filters( 'wp_codebox_apply_approved_artifact', null, $payload );
 		if ( null === $result ) {
+			$this->record_apply_audit( $root, $bundle, $approved_files, $payload, null, new WP_Error( 'wp_codebox_apply_adapter_missing', 'No apply-back adapter handled this approved artifact.', array( 'status' => 501 ) ) );
 			return new WP_Error( 'wp_codebox_apply_adapter_missing', 'No apply-back adapter handled this approved artifact.', array( 'status' => 501 ) );
 		}
 
 		if ( is_wp_error( $result ) ) {
+			$this->record_apply_audit( $root, $bundle, $approved_files, $payload, null, $result );
 			return $result;
 		}
+
+		$this->record_apply_audit( $root, $bundle, $approved_files, $payload, $result, null );
 
 		return array(
 			'success'        => true,
@@ -359,6 +369,124 @@ final class WP_Codebox_Artifacts {
 				)
 			)
 		);
+	}
+
+	/**
+	 * @param array<string,mixed> $bundle Artifact bundle.
+	 * @param string[]            $approved_files Approved sandbox paths.
+	 * @param array<string,mixed> $payload Apply adapter payload.
+	 * @param mixed               $result Apply adapter result.
+	 */
+	private function record_apply_audit( string $root, array $bundle, array $approved_files, array $payload, mixed $result, ?WP_Error $error ): void {
+		$record = array(
+			'schema'         => self::APPLY_AUDIT_SCHEMA,
+			'timestamp'      => gmdate( 'c' ),
+			'artifact_id'    => (string) $bundle['id'],
+			'content_digest' => (string) ( $payload['artifact_content_digest'] ?? $bundle['content_digest'] ?? '' ),
+			'patch_sha256'   => (string) ( $payload['patch_sha256'] ?? '' ),
+			'requester'      => $this->requester_principal( $bundle ),
+			'approver'       => $this->approver_principal( $payload['approver'] ?? null ),
+			'approved_files' => $approved_files,
+			'adapter'        => is_array( $result ) ? ( $result['adapter'] ?? null ) : $this->adapter_from_error( $error ),
+			'status'         => null === $error ? 'success' : 'failure',
+		);
+
+		if ( is_array( $result ) ) {
+			$record['result'] = $this->redact_audit_metadata( $result );
+		}
+
+		if ( null !== $error ) {
+			$record['error'] = array(
+				'code'    => $error->get_error_code(),
+				'message' => $error->get_error_message(),
+				'data'    => $this->redact_audit_metadata( $error->get_error_data() ),
+			);
+		}
+
+		$record = $this->strip_null_values( $record );
+		$line   = function_exists( 'wp_json_encode' ) ? wp_json_encode( $record, JSON_UNESCAPED_SLASHES ) : json_encode( $record, JSON_UNESCAPED_SLASHES );
+		if ( false === $line ) {
+			return;
+		}
+
+		file_put_contents( $this->apply_audit_path( $root ), $line . "\n", FILE_APPEND | LOCK_EX );
+	}
+
+	private function apply_audit_path( string $root ): string {
+		$path = $root . DIRECTORY_SEPARATOR . 'apply-audit.jsonl';
+
+		if ( function_exists( 'apply_filters' ) ) {
+			$path = (string) apply_filters( 'wp_codebox_apply_audit_path', $path, $root );
+		}
+
+		return $path;
+	}
+
+	/** @param array<string,mixed> $bundle Artifact bundle. */
+	private function requester_principal( array $bundle ): mixed {
+		foreach ( array( 'metadata', 'review' ) as $section ) {
+			$provenance = is_array( $bundle[ $section ]['provenance'] ?? null ) ? $bundle[ $section ]['provenance'] : array();
+			$task       = is_array( $provenance['task'] ?? null ) ? $provenance['task'] : array();
+
+			foreach ( array( 'requester', 'requested_by', 'principal', 'user' ) as $key ) {
+				if ( ! empty( $task[ $key ] ) ) {
+					return $task[ $key ];
+				}
+			}
+		}
+
+		return null;
+	}
+
+	private function approver_principal( mixed $input_approver ): mixed {
+		if ( null !== $input_approver && '' !== $input_approver ) {
+			return $input_approver;
+		}
+
+		if ( function_exists( 'wp_get_current_user' ) ) {
+			$user = wp_get_current_user();
+			if ( is_object( $user ) && ! empty( $user->ID ) ) {
+				return array(
+					'id'    => (int) $user->ID,
+					'login' => (string) ( $user->user_login ?? '' ),
+				);
+			}
+		}
+
+		return null;
+	}
+
+	private function adapter_from_error( ?WP_Error $error ): mixed {
+		if ( null === $error ) {
+			return null;
+		}
+
+		$data = $error->get_error_data();
+		return is_array( $data ) ? ( $data['adapter'] ?? null ) : null;
+	}
+
+	private function redact_audit_metadata( mixed $value ): mixed {
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		$redacted = array();
+		foreach ( $value as $key => $item ) {
+			$normalized_key = strtolower( (string) $key );
+			if ( in_array( $normalized_key, array( 'patch', 'patch_body', 'patch_diff', 'diff', 'body', 'content', 'contents' ), true ) ) {
+				$redacted[ $key ] = '[redacted]';
+				continue;
+			}
+
+			$redacted[ $key ] = $this->redact_audit_metadata( $item );
+		}
+
+		return $redacted;
+	}
+
+	/** @param array<string,mixed> $record Audit record. @return array<string,mixed> */
+	private function strip_null_values( array $record ): array {
+		return array_filter( $record, static fn( mixed $value ): bool => null !== $value );
 	}
 
 	private function path_is_inside( string $path, string $root ): bool {

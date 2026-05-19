@@ -281,7 +281,20 @@ file_put_contents(
 		JSON_PRETTY_PRINT
 	) . "\n"
 );
-file_put_contents( $bundle_dir . '/metadata.json', json_encode( array( 'artifacts' => array( 'patch' => 'files/patch.diff' ) ), JSON_PRETTY_PRINT ) . "\n" );
+file_put_contents(
+	$bundle_dir . '/metadata.json',
+	json_encode(
+		array(
+			'artifacts'  => array( 'patch' => 'files/patch.diff' ),
+			'provenance' => array(
+				'task' => array(
+					'requester' => 'chat:user-7',
+				),
+			),
+		),
+		JSON_PRETTY_PRINT
+	) . "\n"
+);
 file_put_contents( $bundle_dir . '/files/changed-files.json', $changed_files_json );
 file_put_contents( $bundle_dir . '/files/patch.diff', $patch_diff );
 file_put_contents(
@@ -350,6 +363,8 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function 
 		'patch_sha256'            => $payload['patch_sha256'],
 		'artifact_content_digest' => $payload['artifact_content_digest'],
 		'patch_contains'          => str_contains( $payload['patch'], 'cooked' ),
+		'patch'                   => $payload['patch'],
+		'pr_url'                  => 'https://github.com/chubes4/wp-codebox/pull/999',
 	);
 };
 $applied = $artifacts->apply_approved(
@@ -361,6 +376,32 @@ $applied = $artifacts->apply_approved(
 	)
 );
 $assert( 'approved artifact apply delegates exact patch', ! is_wp_error( $applied ) && true === ( $applied['result']['patch_contains'] ?? false ) && hash( 'sha256', $patch_diff ) === ( $applied['patch_sha256'] ?? '' ) && $content_digest === ( $applied['content_digest'] ?? '' ) );
+
+$audit_path      = $artifact_root . '/apply-audit.jsonl';
+$audit_lines     = is_file( $audit_path ) ? array_values( array_filter( explode( "\n", trim( (string) file_get_contents( $audit_path ) ) ) ) ) : array();
+$success_audit   = isset( $audit_lines[0] ) ? json_decode( $audit_lines[0], true ) : array();
+$success_encoded = isset( $audit_lines[0] ) ? $audit_lines[0] : '';
+$assert( 'approved artifact apply writes success audit record', is_array( $success_audit ) && 'wp-codebox/apply-audit/v1' === ( $success_audit['schema'] ?? '' ) && 'success' === ( $success_audit['status'] ?? '' ) );
+$assert( 'success audit records reviewed principals and files', 'chat:user-7' === ( $success_audit['requester'] ?? '' ) && 'site-user:1' === ( $success_audit['approver'] ?? '' ) && array( '/wordpress/wp-content/plugins/example/generated.txt' ) === ( $success_audit['approved_files'] ?? array() ) );
+$assert( 'success audit records digest and adapter metadata', $artifact_id === ( $success_audit['artifact_id'] ?? '' ) && $content_digest === ( $success_audit['content_digest'] ?? '' ) && 'test-adapter' === ( $success_audit['adapter'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/999' === ( $success_audit['result']['pr_url'] ?? '' ) );
+$assert( 'success audit excludes raw patch body', ! str_contains( $success_encoded, 'diff --git' ) && '[redacted]' === ( $success_audit['result']['patch'] ?? '' ) );
+
+$GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function (): WP_Error {
+	return new WP_Error( 'wp_codebox_adapter_failed', 'Adapter failed to apply artifact.', array( 'status' => 502, 'adapter' => 'test-adapter', 'patch' => 'diff --git should not persist' ) );
+};
+$failed_apply = $artifacts->apply_approved(
+	array(
+		'artifacts_path'  => $artifact_root,
+		'artifact_id'     => $artifact_id,
+		'approved_files'  => array( '/wordpress/wp-content/plugins/example/generated.txt' ),
+		'approver'        => 'site-user:2',
+	)
+);
+$audit_lines   = is_file( $audit_path ) ? array_values( array_filter( explode( "\n", trim( (string) file_get_contents( $audit_path ) ) ) ) ) : array();
+$failure_audit = isset( $audit_lines[1] ) ? json_decode( $audit_lines[1], true ) : array();
+$failure_encoded = isset( $audit_lines[1] ) ? $audit_lines[1] : '';
+$assert( 'approved artifact apply writes adapter failure audit record', is_wp_error( $failed_apply ) && is_array( $failure_audit ) && 'failure' === ( $failure_audit['status'] ?? '' ) && 'test-adapter' === ( $failure_audit['adapter'] ?? '' ) && 'wp_codebox_adapter_failed' === ( $failure_audit['error']['code'] ?? '' ) );
+$assert( 'failure audit records approver and excludes raw patch body', 'site-user:2' === ( $failure_audit['approver'] ?? '' ) && ! str_contains( $failure_encoded, 'diff --git' ) && '[redacted]' === ( $failure_audit['error']['data']['patch'] ?? '' ) );
 
 $unknown_apply = $artifacts->apply_approved(
 	array(
