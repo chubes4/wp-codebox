@@ -72,6 +72,8 @@ WP Codebox mounts the local plugin directory into WordPress Playground and boots
 
 `wordpress.wp-cli` runs WP-CLI inside the same Playground runtime with `/tmp/wp-cli.phar` and `--path=/wordpress`. WP Codebox automatically enables Playground's `wp-cli` extra library when this command is allowed by the runtime policy. Pass commands with `--arg command='wp option get home'`; the leading `wp` is optional.
 
+`wordpress.ability` executes a registered WordPress Ability inside the sandbox. Pass `name=<ability>` and optional JSON `input=<object>`. WP Codebox runs the command in a REST-shaped WordPress request so recipe-installed plugins can register their normal ability surfaces.
+
 WP Codebox defaults Playground to WordPress `7.0` because its agent and AI plugin stacks require the modern WordPress AI surface. Use `--wp trunk`, `--wp nightly`, or another numeric WordPress version when a mounted plugin stack needs a different runtime.
 
 The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
@@ -131,6 +133,10 @@ Recipe shape:
       {
         "command": "wordpress.wp-cli",
         "args": ["command=wp option get home"]
+      },
+      {
+        "command": "wordpress.ability",
+        "args": ["name=datamachine/import-agent", "input={\"source\":\"/path/in/sandbox\"}"]
       }
     ]
   },
@@ -176,7 +182,7 @@ npm run wp-codebox -- recipe-run \
   --json
 ```
 
-That recipe imports `examples/datamachine-bundle/world-creator-lite` inside the disposable Playground runtime through Data Machine's `datamachine/import-agent` ability. It proves the bundle shape without Homeboy in the path; Homeboy, Data Machine Code, wp-gym, or another controller can all consume the resulting WP Codebox artifact bundle.
+That recipe imports `examples/datamachine-bundle/world-creator-lite` inside the disposable Playground runtime through the generic `wordpress.ability` command and Data Machine's `datamachine/import-agent` ability. It proves the bundle shape without Homeboy in the path; Homeboy, Data Machine Code, wp-gym, or another controller can all consume the resulting WP Codebox artifact bundle.
 
 To run a different Data Machine-compatible bundle, change the bundle mount source while keeping the target path stable:
 

@@ -29,9 +29,10 @@
   "workflow": {
     "steps": [
       {
-        "command": "wordpress.run-php",
+        "command": "wordpress.ability",
         "args": [
-          "code-file=./examples/datamachine/import-agent-bundle.php"
+          "name=datamachine/import-agent",
+          "input={\"source\":\"/wordpress/wp-content/wp-codebox-inputs/datamachine-bundle\",\"on_conflict\":\"upgrade\",\"owner_id\":1}"
         ]
       }
     ]

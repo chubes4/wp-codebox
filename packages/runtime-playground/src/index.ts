@@ -565,6 +565,10 @@ class PlaygroundRuntime implements Runtime {
       return this.runWpCli(spec)
     }
 
+    if (spec.command === "wordpress.ability") {
+      return this.runAbility(spec)
+    }
+
     throw new Error(`No Playground command handler is registered for: ${spec.command}`)
   }
 
@@ -600,6 +604,26 @@ class PlaygroundRuntime implements Runtime {
     }
 
     return cleanWpCliOutput(response.text)
+  }
+
+  private async runAbility(spec: ExecutionSpec): Promise<string> {
+    const server = await this.bootPlayground()
+    const name = argValue(spec.args ?? [], "name")?.trim()
+    if (!name) {
+      throw new Error("wordpress.ability requires name=<ability-name>")
+    }
+
+    const input = abilityInputFromArgs(spec.args ?? [])
+    const response = await server.playground.run({ code: this.bootstrapAbilityPhpCode(abilityPhpCode(name, input)) })
+    return response.text
+  }
+
+  private bootstrapAbilityPhpCode(code: string): string {
+    return `<?php
+$_SERVER['REQUEST_URI'] = '/wp-json/wp-codebox/ability';
+require_once '/wordpress/wp-load.php';
+${this.secretEnvPhp()}
+${phpBody(code)}`
   }
 
   private bootstrapPhpCode(code: string, args: string[]): string {
@@ -746,6 +770,40 @@ function wpCliCommandFromArgs(args: string[]): string {
   }
 
   return args.join(" ").trim()
+}
+
+function abilityInputFromArgs(args: string[]): unknown {
+  const raw = argValue(args, "input")
+  if (!raw) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`wordpress.ability input must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function abilityPhpCode(name: string, input: unknown): string {
+  return `wp_set_current_user( 1 );
+if ( ! function_exists( 'wp_get_ability' ) ) {
+    throw new RuntimeException( 'The WordPress Abilities API is not available in this runtime.' );
+}
+$ability = wp_get_ability( ${JSON.stringify(name)} );
+if ( ! $ability ) {
+    throw new RuntimeException( sprintf( 'Ability is not registered: %s', ${JSON.stringify(name)} ) );
+}
+$result = $ability->execute( json_decode( ${JSON.stringify(JSON.stringify(input))}, true ) );
+if ( is_wp_error( $result ) ) {
+    throw new RuntimeException( $result->get_error_message() );
+}
+echo wp_json_encode( array(
+    'command' => 'wordpress.ability',
+    'name' => ${JSON.stringify(name)},
+    'input' => json_decode( ${JSON.stringify(JSON.stringify(input))}, true ),
+    'result' => $result,
+), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );`
 }
 
 function shellArgv(command: string): string[] {
