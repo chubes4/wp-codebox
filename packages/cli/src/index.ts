@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
-import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe } from "@chubes4/wp-codebox-core"
+import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
 interface RunOptions {
@@ -271,6 +271,16 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
       createPlaygroundRuntimeBackend(),
     )
 
+    for (const plugin of recipeExtraPlugins(recipe)) {
+      const slug = recipeExtraPluginSlug(plugin)
+      await runtime.mount({
+        type: "directory",
+        source: resolve(recipeDirectory, plugin.source),
+        target: `/wordpress/wp-content/plugins/${slug}`,
+        mode: "readonly",
+      })
+    }
+
     for (const mount of recipe.inputs?.mounts ?? []) {
       await runtime.mount({
         type: "directory",
@@ -278,6 +288,11 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
         target: mount.target,
         mode: mount.mode ?? "readwrite",
       })
+    }
+
+    const pluginActivationCode = activateExtraPluginsCode(recipe)
+    if (pluginActivationCode) {
+      executions.push(await runtime.execute({ command: "wordpress.run-php", args: [`code=${pluginActivationCode}`] }))
     }
 
     for (const step of recipe.workflow.steps) {
@@ -777,14 +792,75 @@ function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe 
     }
   }
 
+  const rawExtraPlugins = recipe.inputs?.extra_plugins ?? recipe.inputs?.extraPlugins
+  if (rawExtraPlugins && !Array.isArray(rawExtraPlugins)) {
+    throw new Error(`Recipe extra_plugins must be an array: ${recipePath}`)
+  }
+
+  for (const plugin of recipeExtraPlugins(recipe)) {
+    if (!plugin.source) {
+      throw new Error(`Recipe extra_plugins entries must include source: ${recipePath}`)
+    }
+
+    if (plugin.slug && !/^[a-z0-9][a-z0-9-_]*$/i.test(plugin.slug)) {
+      throw new Error(`Recipe extra_plugins slug must be a plugin-directory slug: ${recipePath}`)
+    }
+  }
+
   return recipe
 }
 
 function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
+  const commands = recipe.workflow.steps.map((step) => step.command)
+  if (recipeExtraPlugins(recipe).some((plugin) => plugin.activate !== false)) {
+    commands.unshift("wordpress.run-php")
+  }
+
   return {
     ...defaultPolicy,
-    commands: [...new Set(recipe.workflow.steps.map((step) => step.command))],
+    commands: [...new Set(commands)],
   }
+}
+
+function recipeExtraPlugins(recipe: WorkspaceRecipe): WorkspaceRecipeExtraPlugin[] {
+  return recipe.inputs?.extra_plugins ?? recipe.inputs?.extraPlugins ?? []
+}
+
+function recipeExtraPluginSlug(plugin: WorkspaceRecipeExtraPlugin): string {
+  return plugin.slug ?? basename(resolve(plugin.source))
+}
+
+function recipeExtraPluginFile(plugin: WorkspaceRecipeExtraPlugin): string {
+  const slug = recipeExtraPluginSlug(plugin)
+  return plugin.pluginFile ?? `${slug}/${slug}.php`
+}
+
+function activateExtraPluginsCode(recipe: WorkspaceRecipe): string | null {
+  const pluginFiles = recipeExtraPlugins(recipe)
+    .filter((plugin) => plugin.activate !== false)
+    .map(recipeExtraPluginFile)
+
+  if (pluginFiles.length === 0) {
+    return null
+  }
+
+  return `require_once ABSPATH . 'wp-admin/includes/plugin.php';
+$plugins = ${JSON.stringify(pluginFiles)};
+$activated = array();
+foreach ($plugins as $plugin) {
+    $plugin_file = WP_PLUGIN_DIR . '/' . $plugin;
+    if (! file_exists($plugin_file)) {
+        throw new RuntimeException(sprintf('Recipe extra plugin is not mounted: %s', $plugin));
+    }
+    if (! is_plugin_active($plugin)) {
+        $result = activate_plugin($plugin);
+        if (is_wp_error($result)) {
+            throw new RuntimeException($result->get_error_message());
+        }
+    }
+    $activated[] = $plugin;
+}
+echo wp_json_encode(array('command' => 'activate-extra-plugins', 'plugins' => $activated), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);`
 }
 
 function parseMount(value: string): RunOptions["mounts"][number] {

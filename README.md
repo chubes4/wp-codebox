@@ -95,6 +95,13 @@ Recipe shape:
     "wp": "latest"
   },
   "inputs": {
+    "extra_plugins": [
+      {
+        "source": "../../../woocommerce",
+        "slug": "woocommerce",
+        "pluginFile": "woocommerce/woocommerce.php"
+      }
+    ],
     "mounts": [
       {
         "source": "../simple-plugin",
@@ -118,7 +125,44 @@ Recipe shape:
 }
 ```
 
-The first recipe schema intentionally maps to existing runtime primitives: WordPress version, mounted inputs, allow-listed environment variable names, workflow steps, and artifact directory. Relative mount paths resolve from the recipe file location. Workflow commands are used as the runtime command allow-list for that run.
+The first recipe schema intentionally maps to existing runtime primitives: WordPress version, mounted inputs, extra WordPress plugins, allow-listed environment variable names, workflow steps, and artifact directory. Relative mount paths and `extra_plugins` sources resolve from the recipe file location. Workflow commands are used as the runtime command allow-list for that run.
+
+`extra_plugins` mounts local plugin checkouts into `/wordpress/wp-content/plugins/<slug>` and activates them before the workflow steps run. This lets recipes add WooCommerce, Data Machine, provider plugins, test helpers, or experimental runtime extensions without adding product-specific code to WP Codebox. `pluginFile` defaults to `<slug>/<slug>.php`; set it when the plugin entrypoint differs.
+
+The Data Machine bundle example installs sibling `agents-api` and `data-machine` checkouts through `extra_plugins`, then mounts a small bundle directory that follows the same `manifest.json`, `memory/agent`, `pipelines`, and `flows` layout used by World of WordPress and WP Site Generator bundles:
+
+```bash
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/datamachine-agent-bundle.json \
+  --json
+```
+
+That recipe imports `examples/datamachine-bundle/world-creator-lite` inside the disposable Playground runtime through Data Machine's `datamachine/import-agent` ability. It proves the bundle shape without Homeboy in the path; Homeboy, Data Machine Code, wp-gym, or another controller can all consume the resulting WP Codebox artifact bundle.
+
+To run a different Data Machine-compatible bundle, change the bundle mount source while keeping the target path stable:
+
+```json
+{
+  "source": "../../../world-of-wordpress/bundles/world-creator",
+  "target": "/wordpress/wp-content/wp-codebox-inputs/datamachine-bundle",
+  "mode": "readwrite"
+}
+```
+
+Agent runtime awareness remains a bundle concern. A `wordpress_native_agent` can keep Data Machine's default context/directive behavior and know it is operating inside WordPress. A `blind_agent` can use Data Machine's `agent_config.directive_policy` to suppress runtime context before prompts are assembled, for example:
+
+```json
+{
+  "agent_config": {
+    "directive_policy": {
+      "mode": "allow_only",
+      "allow_only": []
+    }
+  }
+}
+```
+
+That keeps WP Codebox generic: the recipe defines the runtime ingredients, while the imported agent bundle decides whether the model should see WordPress/Data Machine context.
 
 ## Artifact Bundles
 

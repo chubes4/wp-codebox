@@ -1,0 +1,18 @@
+{
+  "name": "World Creator Lite Pipeline",
+  "schema_version": 1,
+  "slug": "world-creator-lite-pipeline",
+  "steps": [
+    {
+      "step_config": {
+        "agent_modes": ["pipeline", "world"],
+        "execution_order": 0,
+        "label": "Run World Creator Lite",
+        "step_type": "ai",
+        "system_prompt": "Use the injected memory to summarize what the sandbox world needs next. Keep the response brief."
+      },
+      "step_position": 0,
+      "step_type": "ai"
+    }
+  ]
+}

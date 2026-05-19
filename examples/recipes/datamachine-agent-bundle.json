@@ -1,0 +1,42 @@
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": {
+    "backend": "wordpress-playground",
+    "name": "datamachine-agent-bundle-lab",
+    "wp": "trunk"
+  },
+  "inputs": {
+    "extra_plugins": [
+      {
+        "source": "../../../agents-api",
+        "slug": "agents-api",
+        "pluginFile": "agents-api/agents-api.php"
+      },
+      {
+        "source": "../../../data-machine",
+        "slug": "data-machine",
+        "pluginFile": "data-machine/data-machine.php"
+      }
+    ],
+    "mounts": [
+      {
+        "source": "../datamachine-bundle/world-creator-lite",
+        "target": "/wordpress/wp-content/wp-codebox-inputs/datamachine-bundle",
+        "mode": "readwrite"
+      }
+    ]
+  },
+  "workflow": {
+    "steps": [
+      {
+        "command": "wordpress.run-php",
+        "args": [
+          "code-file=./examples/datamachine/import-agent-bundle.php"
+        ]
+      }
+    ]
+  },
+  "artifacts": {
+    "directory": "./artifacts"
+  }
+}

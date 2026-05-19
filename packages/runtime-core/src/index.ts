@@ -61,6 +61,13 @@ export interface WorkspaceRecipeStep {
   args?: string[]
 }
 
+export interface WorkspaceRecipeExtraPlugin {
+  source: string
+  slug?: string
+  pluginFile?: string
+  activate?: boolean
+}
+
 export interface WorkspaceRecipe {
   schema: "wp-codebox/workspace-recipe/v1"
   runtime?: {
@@ -71,6 +78,8 @@ export interface WorkspaceRecipe {
   }
   inputs?: {
     mounts?: WorkspaceRecipeMount[]
+    extra_plugins?: WorkspaceRecipeExtraPlugin[]
+    extraPlugins?: WorkspaceRecipeExtraPlugin[]
     secretEnv?: string[]
   }
   workflow: {

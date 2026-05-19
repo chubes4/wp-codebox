@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "bundle_slug": "world-creator-lite",
+  "bundle_version": "0.1.0",
+  "source_ref": "chubes4/wp-codebox/examples/datamachine-bundle/world-creator-lite",
+  "source_revision": "example",
+  "exported_at": "2026-05-19T00:00:00Z",
+  "exported_by": "WP Codebox",
+  "agent": {
+    "slug": "world-creator-lite",
+    "label": "World Creator Lite",
+    "description": "Small Data Machine agent bundle fixture based on the World of WordPress bundle directory shape.",
+    "agent_config": {
+      "default_provider": "openai",
+      "default_model": "gpt-5.5",
+      "max_turns": 3,
+      "daily_memory": {
+        "enabled": true,
+        "recent_days": 7
+      }
+    }
+  },
+  "run_artifacts": {
+    "daily_memory": {
+      "egress": ["bundle-file"],
+      "bundle_relative_path": "memory/agent/daily/{yyyy}/{mm}/{dd}.md"
+    },
+    "transcript_summary": {
+      "egress": ["artifact"]
+    }
+  },
+  "included": {
+    "memory": ["MEMORY.md", "SOUL.md"],
+    "pipelines": ["world-creator-lite-pipeline"],
+    "flows": ["world-creator-lite-cycle-flow"],
+    "prompts": [],
+    "rubrics": [],
+    "tool_policies": [],
+    "auth_refs": [],
+    "seed_queues": [],
+    "handler_auth": "refs"
+  }
+}

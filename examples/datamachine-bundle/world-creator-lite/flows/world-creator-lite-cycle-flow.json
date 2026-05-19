@@ -1,0 +1,27 @@
+{
+  "max_items": [],
+  "name": "World Creator Lite Cycle",
+  "pipeline_slug": "world-creator-lite-pipeline",
+  "schedule": "manual",
+  "schema_version": 1,
+  "slug": "world-creator-lite-cycle-flow",
+  "steps": [
+    {
+      "agent_modes": ["pipeline", "world"],
+      "enabled_tools": ["agent_memory", "agent_daily_memory"],
+      "handler_configs": {},
+      "completion_assertions": {
+        "required_tool_names": ["agent_memory"]
+      },
+      "prompt_queue": [
+        {
+          "added_at": "2026-05-19T00:00:00Z",
+          "prompt": "Inspect your memory and describe one small next step for the sandbox world."
+        }
+      ],
+      "queue_mode": "static",
+      "step_position": 0,
+      "step_type": "ai"
+    }
+  ]
+}
