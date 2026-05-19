@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { createRuntime, type ArtifactBundle, type ExecutionResult, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
@@ -33,6 +33,32 @@ interface RecipeRunOptions {
   recipePath: string
   artifactsDirectory?: string
   json: boolean
+}
+
+interface RecipeValidateOptions {
+  recipePath: string
+  json: boolean
+}
+
+interface RecipeValidationIssue {
+  code: string
+  path: string
+  message: string
+}
+
+interface RecipeValidateOutput {
+  success: boolean
+  schema: "wp-codebox/recipe-validation/v1"
+  recipePath?: string
+  valid: boolean
+  issues: RecipeValidationIssue[]
+  summary?: {
+    steps: number
+    mounts: number
+    workspaces: number
+    extraPlugins: number
+  }
+  error?: RunOutput["error"]
 }
 
 interface RecipeRunOutput {
@@ -113,6 +139,7 @@ const defaultPolicy: RuntimePolicy = {
 }
 
 const DEFAULT_WORDPRESS_VERSION = "7.0"
+const supportedRecipeCommands = new Set(["inspect-mounted-inputs", "wordpress.run-php", "wordpress.wp-cli", "wordpress.ability"])
 
 const secretEnvPolicy: RuntimePolicy = {
   ...defaultPolicy,
@@ -139,6 +166,25 @@ async function main(args: string[]): Promise<number> {
 
     const { result, logs } = await captureStdout(execute)
     const output = logs.length > 0 ? { ...result, logs } : result
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    return output.success ? 0 : 1
+  }
+
+  if (command === "recipe") {
+    const subcommand = args.shift()
+    if (subcommand !== "validate") {
+      console.error(`Unknown recipe command: ${subcommand ?? ""}`)
+      printHelp()
+      return 1
+    }
+
+    const options = parseRecipeValidateOptions(args)
+    const output = await validateRecipe(options)
+    if (!options.json) {
+      printRecipeValidateHumanOutput(output)
+      return output.success ? 0 : 1
+    }
+
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
     return output.success ? 0 : 1
   }
@@ -366,6 +412,44 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
       ...(runtime ? { runtime: await runtime.info() } : {}),
       executions,
       ...(artifacts ? { artifacts } : {}),
+      error: serializeError(error),
+    }
+  }
+}
+
+async function validateRecipe(options: RecipeValidateOptions): Promise<RecipeValidateOutput> {
+  const recipePath = resolve(options.recipePath)
+  try {
+    const raw = await readFile(recipePath, "utf8")
+    const recipe = parseWorkspaceRecipe(raw, recipePath)
+    const issues = await validateWorkspaceRecipe(recipe, recipePath)
+
+    return {
+      success: issues.length === 0,
+      schema: "wp-codebox/recipe-validation/v1",
+      recipePath,
+      valid: issues.length === 0,
+      issues,
+      summary: {
+        steps: recipe.workflow.steps.length,
+        mounts: recipe.inputs?.mounts?.length ?? 0,
+        workspaces: recipe.inputs?.workspaces?.length ?? 0,
+        extraPlugins: recipeExtraPlugins(recipe).length,
+      },
+    }
+  } catch (error) {
+    return {
+      success: false,
+      schema: "wp-codebox/recipe-validation/v1",
+      recipePath,
+      valid: false,
+      issues: [
+        {
+          code: "invalid-recipe",
+          path: "$",
+          message: error instanceof SyntaxError ? `Recipe JSON is invalid: ${error.message}` : error instanceof Error ? error.message : String(error),
+        },
+      ],
       error: serializeError(error),
     }
   }
@@ -793,6 +877,40 @@ function parseRecipeRunOptions(args: string[]): RecipeRunOptions {
   return options as RecipeRunOptions
 }
 
+function parseRecipeValidateOptions(args: string[]): RecipeValidateOptions {
+  const options: Partial<RecipeValidateOptions> = { json: false }
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+
+    if (arg === "--json") {
+      options.json = true
+      continue
+    }
+
+    const [name, inlineValue] = arg.split("=", 2)
+    const value = inlineValue ?? args[++index]
+
+    if (!name.startsWith("--") || value === undefined) {
+      throw new Error(`Invalid argument: ${arg}`)
+    }
+
+    switch (name) {
+      case "--recipe":
+        options.recipePath = value
+        break
+      default:
+        throw new Error(`Unknown option: ${name}`)
+    }
+  }
+
+  if (!options.recipePath) {
+    throw new Error("Missing required option: --recipe")
+  }
+
+  return options as RecipeValidateOptions
+}
+
 function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe {
   const recipe = JSON.parse(raw) as WorkspaceRecipe
 
@@ -867,6 +985,149 @@ function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe 
   }
 
   return recipe
+}
+
+async function validateWorkspaceRecipe(recipe: WorkspaceRecipe, recipePath: string): Promise<RecipeValidationIssue[]> {
+  const recipeDirectory = dirname(recipePath)
+  const issues: RecipeValidationIssue[] = []
+  const addIssue = (code: string, path: string, message: string): void => {
+    issues.push({ code, path, message })
+  }
+
+  if (recipe.runtime?.backend && recipe.runtime.backend !== "wordpress-playground") {
+    addIssue("unsupported-backend", "$.runtime.backend", `Unsupported recipe backend: ${recipe.runtime.backend}`)
+  }
+
+  for (const [index, step] of recipe.workflow.steps.entries()) {
+    const path = `$.workflow.steps[${index}]`
+    if (!supportedRecipeCommands.has(step.command)) {
+      addIssue("unsupported-command", `${path}.command`, `Unsupported recipe command: ${step.command}`)
+      continue
+    }
+
+    await validateRecipeStepArgs(step, path, addIssue)
+  }
+
+  for (const [index, mount] of (recipe.inputs?.mounts ?? []).entries()) {
+    const path = `$.inputs.mounts[${index}]`
+    await validateExistingDirectory(resolve(recipeDirectory, mount.source), `${path}.source`, addIssue)
+    validateAbsoluteSandboxPath(mount.target, `${path}.target`, addIssue)
+  }
+
+  for (const [index, workspace] of (recipe.inputs?.workspaces ?? []).entries()) {
+    const path = `$.inputs.workspaces[${index}]`
+    if (workspace.seed.type === "directory") {
+      await validateExistingDirectory(resolve(recipeDirectory, workspace.seed.source ?? ""), `${path}.seed.source`, addIssue)
+      if (!workspace.target) {
+        addIssue("missing-target", `${path}.target`, "Directory workspace seeds require an explicit sandbox target.")
+      }
+    }
+
+    if (workspace.target) {
+      validateAbsoluteSandboxPath(workspace.target, `${path}.target`, addIssue)
+    }
+
+    if (workspace.seed.slug && !/^[a-z0-9][a-z0-9-_]*$/i.test(workspace.seed.slug)) {
+      addIssue("invalid-slug", `${path}.seed.slug`, `Workspace slug must be a plugin/theme directory slug: ${workspace.seed.slug}`)
+    }
+  }
+
+  for (const [index, plugin] of recipeExtraPlugins(recipe).entries()) {
+    const path = `$.inputs.extra_plugins[${index}]`
+    const pluginSource = resolve(recipeDirectory, plugin.source)
+    const slug = recipeExtraPluginSlug(plugin)
+    const pluginFile = recipeExtraPluginFile(plugin)
+    await validateExistingDirectory(pluginSource, `${path}.source`, addIssue)
+
+    if (!pluginFile.startsWith(`${slug}/`)) {
+      addIssue("invalid-plugin-file", `${path}.pluginFile`, `Plugin file must be relative to the mounted plugin slug (${slug}/...).`)
+      continue
+    }
+
+    await validateExistingFile(join(pluginSource, pluginFile.slice(slug.length + 1)), `${path}.pluginFile`, addIssue)
+  }
+
+  for (const [index, name] of (recipe.inputs?.secretEnv ?? []).entries()) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
+      addIssue("invalid-secret-env", `$.inputs.secretEnv[${index}]`, `Secret environment variable names must match /^[A-Z_][A-Z0-9_]*$/: ${name}`)
+    }
+  }
+
+  return issues
+}
+
+async function validateRecipeStepArgs(step: WorkspaceRecipe["workflow"]["steps"][number], path: string, addIssue: (code: string, path: string, message: string) => void): Promise<void> {
+  if (step.command === "wordpress.run-php") {
+    const code = recipeStepArgValue(step.args ?? [], "code")
+    const codeFile = recipeStepArgValue(step.args ?? [], "code-file")
+    if (!code && !codeFile) {
+      addIssue("missing-code", `${path}.args`, "wordpress.run-php requires code=<php> or code-file=<path>.")
+    }
+    if (code && codeFile) {
+      addIssue("ambiguous-code", `${path}.args`, "wordpress.run-php accepts either code=<php> or code-file=<path>, not both.")
+    }
+    if (codeFile) {
+      await validateExistingFile(resolve(codeFile), `${path}.args`, addIssue)
+    }
+    return
+  }
+
+  if (step.command === "wordpress.wp-cli" && recipeWpCliCommandFromArgs(step.args ?? []).length === 0) {
+    addIssue("missing-command", `${path}.args`, "wordpress.wp-cli requires a non-empty command.")
+    return
+  }
+
+  if (step.command === "wordpress.ability") {
+    if (!recipeStepArgValue(step.args ?? [], "name")?.trim()) {
+      addIssue("missing-ability-name", `${path}.args`, "wordpress.ability requires name=<ability-name>.")
+    }
+
+    const input = recipeStepArgValue(step.args ?? [], "input")
+    if (input) {
+      try {
+        JSON.parse(input)
+      } catch (error) {
+        addIssue("invalid-ability-input", `${path}.args`, `wordpress.ability input must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+}
+
+async function validateExistingDirectory(path: string, issuePath: string, addIssue: (code: string, path: string, message: string) => void): Promise<void> {
+  try {
+    const result = await stat(path)
+    if (!result.isDirectory()) {
+      addIssue("not-directory", issuePath, `Expected directory: ${path}`)
+    }
+  } catch {
+    addIssue("missing-path", issuePath, `Directory does not exist: ${path}`)
+  }
+}
+
+async function validateExistingFile(path: string, issuePath: string, addIssue: (code: string, path: string, message: string) => void): Promise<void> {
+  try {
+    const result = await stat(path)
+    if (!result.isFile()) {
+      addIssue("not-file", issuePath, `Expected file: ${path}`)
+    }
+  } catch {
+    addIssue("missing-path", issuePath, `File does not exist: ${path}`)
+  }
+}
+
+function validateAbsoluteSandboxPath(path: string, issuePath: string, addIssue: (code: string, path: string, message: string) => void): void {
+  if (!path.startsWith("/")) {
+    addIssue("invalid-sandbox-path", issuePath, `Sandbox paths must be absolute: ${path}`)
+  }
+}
+
+function recipeStepArgValue(args: string[], key: string): string | undefined {
+  const prefix = `${key}=`
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length)
+}
+
+function recipeWpCliCommandFromArgs(args: string[]): string {
+  return recipeStepArgValue(args, "command")?.trim() ?? args.join(" ").trim()
 }
 
 function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
@@ -1139,6 +1400,22 @@ function printRecipeHumanOutput(output: RecipeRunOutput): void {
   console.log(`Artifacts: ${output.artifacts?.directory ?? "none"}`)
 }
 
+function printRecipeValidateHumanOutput(output: RecipeValidateOutput): void {
+  console.log("WP Codebox recipe validation")
+  console.log(`Recipe: ${output.recipePath ?? "unknown"}`)
+  console.log(`Valid: ${output.valid ? "yes" : "no"}`)
+  if (output.summary) {
+    console.log(`Steps: ${output.summary.steps}`)
+    console.log(`Mounts: ${output.summary.mounts}`)
+    console.log(`Workspaces: ${output.summary.workspaces}`)
+    console.log(`Extra plugins: ${output.summary.extraPlugins}`)
+  }
+
+  for (const issue of output.issues) {
+    console.log(`- ${issue.code} ${issue.path}: ${issue.message}`)
+  }
+}
+
 function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
   console.log("WP Codebox batch")
   console.log(`Runs: ${output.completed}/${output.total} completed`)
@@ -1153,6 +1430,7 @@ function printBatchHumanOutput(output: AgentSandboxBatchOutput): void {
 
 function printHelp(): void {
   console.log(`Usage:
+  wp-codebox recipe validate --recipe <path> [--json]
   wp-codebox recipe-run --recipe <path> [options]
   wp-codebox run --mount <host>:<vfs> --command <id> [options]
   wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> [options]
@@ -1160,7 +1438,7 @@ function printHelp(): void {
   wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [--task <text> ...] [options]
 
 Options:
-  --recipe <path>     Workspace recipe JSON file for recipe-run.
+  --recipe <path>     Workspace recipe JSON file for recipe-run or recipe validate.
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
   --arg <key=value>    Command argument. Repeatable.
