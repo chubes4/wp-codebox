@@ -1,37 +1,50 @@
 # WP Codebox
 
-Disposable sandboxes for agent-built artifacts, with replayable evidence and reviewable outputs. WordPress Playground is the first backend.
+WP Codebox runs disposable WordPress Playground sandboxes, executes bounded work inside them, and saves replayable artifacts before the sandbox is destroyed.
 
-## Thesis
-
-WP Codebox is not an app, an agent framework, or a CI harness. It is a small runtime contract for platforms that need to create isolated environments, mount inputs, execute controlled actions, observe state, and export durable artifacts before the sandbox disappears.
+It is the runtime boundary for agent-built or workflow-built outputs. It is not the agent framework, the review UI, the deploy system, or the production site mutator.
 
 ```text
-App or agent platform
-  -> WP Codebox contract
-  -> Backend adapter
-  -> Isolated environment
-  -> Replayable artifact bundle
+Parent app, CI job, or WordPress control plane
+  -> WP Codebox
+    -> disposable WordPress Playground runtime
+      -> mounted inputs, plugins, tools, and optional agent stack
+      -> controlled commands or agent task
+      -> artifact bundle
+  -> review, replay, apply, export, or discard outside the sandbox
 ```
 
-The flagship use case is real-time, sandboxed agent work. A product can let a user chat with an agent, run the work inside a disposable sandbox, stream observations, and apply only the resulting artifact to a real project or site.
+## Current Use Cases
 
-For WordPress, this means a control plane such as Studio, Data Machine, or WordPress.com can run agents against WordPress Playground sandboxes instead of granting broad access to production sites, local machines, or CI-only harnesses.
-
-The produced artifact does not have to be WordPress-specific. A WordPress Playground sandbox can still produce a static site, source bundle, dataset, patch, docs export, eval fixture, or any other reviewable output.
+- Run a PHP or WP-CLI probe against mounted WordPress code.
+- Execute a WordPress Ability inside a disposable Playground runtime.
+- Run repeatable workspace recipes that mount plugins, seed workspaces, and capture outputs.
+- Launch sandboxed Data Machine / Agents API coding-agent tasks from the CLI or WordPress ability surface.
+- Fan out several task descriptions into separate isolated sandboxes.
+- Produce artifact bundles that a parent product can review or consume later.
 
 ## Packages
 
 - `@chubes4/wp-codebox-core`: backend-agnostic runtime interfaces and shared types.
-- `@chubes4/wp-codebox-playground`: first backend adapter shaped around WordPress Playground.
-- `@chubes4/wp-codebox-cli`: `wp-codebox` command for external consumers.
-- `packages/wordpress-plugin`: WordPress ability surface for parent sites that launch sandboxed agent tasks.
+- `@chubes4/wp-codebox-playground`: WordPress Playground backend adapter.
+- `@chubes4/wp-codebox-cli`: `wp-codebox` CLI.
+- `packages/wordpress-plugin`: parent-site WordPress ability surface.
 
-## CLI
+## Local Setup
 
 ```bash
 npm install
 npm run build
+npm run check
+```
+
+`npm run check` runs the TypeScript build, policy validation smoke test, WordPress plugin smoke test, and a real Playground-backed CLI smoke test.
+
+## Quick Start
+
+Run PHP inside a disposable WordPress Playground runtime with a local plugin mounted:
+
+```bash
 npm run wp-codebox -- run \
   --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin \
   --command wordpress.run-php \
@@ -40,7 +53,7 @@ npm run wp-codebox -- run \
   --json
 ```
 
-Expected output:
+Expected shape:
 
 ```json
 {
@@ -57,98 +70,44 @@ Expected output:
     "directory": "./artifacts/runtime-...",
     "manifestPath": "./artifacts/runtime-.../manifest.json",
     "blueprintAfterPath": "./artifacts/runtime-.../blueprint.after.json",
-    "blueprintAfterNotesPath": "./artifacts/runtime-.../blueprint.after-notes.json",
-    "eventsPath": "./artifacts/runtime-.../events.jsonl",
-    "commandsPath": "./artifacts/runtime-.../commands.jsonl",
-    "observationsPath": "./artifacts/runtime-.../observations.jsonl",
-    "capturedMountsPath": "./artifacts/runtime-.../files/mounted-files.json"
+    "capturedMountsPath": "./artifacts/runtime-.../files/mounted-files.json",
+    "diffsPath": "./artifacts/runtime-.../files/diffs.json"
   }
 }
 ```
 
-WP Codebox mounts the local plugin directory into WordPress Playground and boots lazily on the first `execute()` call. The CLI command runs PHP from `--arg code-file=...` through `server.playground.run()`, collects artifacts, and disposes the Playground server when the runtime is destroyed. Machine-readable JSON gives consumers such as Data Machine Code, Homeboy Extensions, Studio, wp-gym, and CI runners a stable integration seam.
+WP Codebox boots Playground lazily on the first command, captures artifacts after execution, and disposes the runtime when the run completes.
 
-`wordpress.run-php` accepts either `--arg code-file=<path>` or `--arg code=<php>`. It loads `/wordpress/wp-load.php` before running the supplied PHP so WordPress functions are available by default. Use `--arg bootstrap=none` for raw PHP execution without WordPress bootstrap.
+## CLI Commands
 
-`wordpress.wp-cli` runs WP-CLI inside the same Playground runtime with `/tmp/wp-cli.phar` and `--path=/wordpress`. WP Codebox automatically enables Playground's `wp-cli` extra library when this command is allowed by the runtime policy. Pass commands with `--arg command='wp option get home'`; the leading `wp` is optional.
+### `run`
 
-`wordpress.ability` executes a registered WordPress Ability inside the sandbox. Pass `name=<ability>` and optional JSON `input=<object>`. WP Codebox runs the command in a REST-shaped WordPress request so recipe-installed plugins can register their normal ability surfaces.
-
-WP Codebox defaults Playground to WordPress `7.0` because its agent and AI plugin stacks require the modern WordPress AI surface. Use `--wp trunk`, `--wp nightly`, or another numeric WordPress version when a mounted plugin stack needs a different runtime.
-
-The fixture plugin is documented in [`examples/simple-plugin/README.md`](examples/simple-plugin/README.md).
-
-## Workspace Recipes
-
-Recipes package a repeatable sandbox setup and workflow as JSON. They are the portable lab contract for workshops, contributor-day environments, isolated testing, evals, and reproducible bug kits.
+Run one command in a disposable runtime.
 
 ```bash
-npm run wp-codebox -- recipe-run \
-  --recipe ./examples/recipes/simple-plugin.json \
+npm run wp-codebox -- run \
+  --mount <host-path>:<sandbox-path>[:readonly|readwrite] \
+  --command <command> \
+  --arg <key=value> \
   --json
 ```
 
-Recipe shape:
+Supported runtime commands today:
 
-```json
-{
-  "schema": "wp-codebox/workspace-recipe/v1",
-  "runtime": {
-    "backend": "wordpress-playground",
-    "name": "simple-plugin-lab",
-    "wp": "7.0"
-  },
-  "inputs": {
-    "workspaces": [
-      {
-        "seed": {
-          "type": "plugin_scaffold",
-          "slug": "seeded-helper",
-          "name": "Seeded Helper"
-        }
-      }
-    ],
-    "extra_plugins": [
-      {
-        "source": "../../../woocommerce",
-        "slug": "woocommerce",
-        "pluginFile": "woocommerce/woocommerce.php"
-      }
-    ],
-    "mounts": [
-      {
-        "source": "../simple-plugin",
-        "target": "/wordpress/wp-content/plugins/simple-plugin",
-        "mode": "readwrite"
-      }
-    ],
-    "secretEnv": []
-  },
-  "workflow": {
-    "steps": [
-      {
-        "command": "wordpress.run-php",
-        "args": ["code-file=./examples/simple-plugin/probe.php"]
-      },
-      {
-        "command": "wordpress.wp-cli",
-        "args": ["command=wp option get home"]
-      },
-      {
-        "command": "wordpress.ability",
-        "args": ["name=datamachine/import-agent", "input={\"source\":\"/path/in/sandbox\"}"]
-      }
-    ]
-  },
-  "artifacts": {
-    "directory": "./artifacts"
-  }
-}
-```
+- `inspect-mounted-inputs`: list mounted input entries from inside Playground.
+- `wordpress.run-php`: run PHP; accepts `code=<php>` or `code-file=<path>`.
+- `wordpress.wp-cli`: run WP-CLI; accepts `command='wp option get home'` or plain args.
+- `wordpress.ability`: execute a registered WordPress Ability; accepts `name=<ability>` and optional JSON `input=<object>`.
 
-The first recipe schema intentionally maps to existing runtime primitives: WordPress version, seeded workspaces, mounted inputs, extra WordPress plugins, allow-listed environment variable names, workflow steps, and artifact directory. Relative mount paths, directory workspace seeds, and `extra_plugins` sources resolve from the recipe file location. Workflow commands are used as the runtime command allow-list for that run.
+`wordpress.run-php` loads `/wordpress/wp-load.php` by default. Use `--arg bootstrap=none` for raw PHP.
 
-Validate a recipe without launching Playground:
+`wordpress.wp-cli` automatically enables Playground's `wp-cli` extra library when the command is allowed by runtime policy.
+
+WP Codebox defaults to WordPress `7.0` because the agent and AI plugin stacks need the modern WordPress AI surface. Override with `--wp trunk`, `--wp nightly`, or another supported Playground version.
+
+### `recipe validate`
+
+Validate a workspace recipe without launching Playground.
 
 ```bash
 npm run wp-codebox -- recipe validate \
@@ -156,175 +115,185 @@ npm run wp-codebox -- recipe validate \
   --json
 ```
 
-`recipe validate` checks the recipe schema, source paths, extra plugin entrypoints, workspace seeds, supported workflow commands, JSON ability inputs, and command arguments before a sandbox is created.
+Validation checks schema, source paths, extra plugin entrypoints, workspace seeds, supported workflow commands, JSON ability inputs, and command arguments.
 
-`workspaces` create disposable readwrite directories before Playground boots and mount them into WordPress. Scaffold seeds start from a minimal plugin or theme; directory seeds copy an existing checkout or fixture into the disposable workspace. WP Codebox captures readwrite workspace files into the artifact bundle after workflow steps mutate them.
+### `recipe-run`
+
+Run a repeatable recipe.
+
+```bash
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/simple-plugin.json \
+  --json
+```
+
+Recipes are JSON declarations for a sandbox setup plus workflow steps. They can mount existing directories, create disposable plugin/theme workspaces, activate extra plugins, allow-list selected secret environment variable names, and capture the output as artifacts.
+
+Example recipes:
+
+- `examples/recipes/simple-plugin.json`: mount and probe the fixture plugin.
+- `examples/recipes/wp-cli.json`: prove WP-CLI commands mutate the same runtime observed by later steps.
+- `examples/recipes/seeded-plugin-workspace.json`: create a disposable plugin scaffold, mutate it, and capture diffs.
+- `examples/recipes/datamachine-agent-bundle.json`: mount Agents API and Data Machine, then import a bundle through `wordpress.ability`.
 
 Supported workspace seeds:
 
 - `plugin_scaffold`: creates `<slug>.php` and `README.md`, mounted by default at `/wordpress/wp-content/plugins/<slug>`.
 - `theme_scaffold`: creates `style.css`, `index.php`, and `README.md`, mounted by default at `/wordpress/wp-content/themes/<slug>`.
-- `directory`: copies `seed.source` into a disposable workspace and requires an explicit `target`.
+- `directory`: copies `seed.source` into a disposable workspace and requires an explicit sandbox `target`.
 
-The seeded plugin example proves a scaffold can be activated, mutated, and captured as an artifact:
+### `agent-runtime-probe`
+
+Boot a sandbox with Agents API, Data Machine, and Data Machine Code mounted, then verify the stack loads.
 
 ```bash
-npm run wp-codebox -- recipe-run \
-  --recipe ./examples/recipes/seeded-plugin-workspace.json \
+npm run wp-codebox -- agent-runtime-probe \
+  --agents-api ../agents-api \
+  --data-machine ../data-machine \
+  --data-machine-code ../data-machine-code \
   --json
 ```
 
-The WP-CLI example proves command steps can mutate the same disposable WordPress runtime observed by later PHP steps:
+### `agent-sandbox-run`
+
+Run one natural-language task through a sandboxed agent stack.
 
 ```bash
-npm run wp-codebox -- recipe-run \
-  --recipe ./examples/recipes/wp-cli.json \
+npm run wp-codebox -- agent-sandbox-run \
+  --agents-api ../agents-api \
+  --data-machine ../data-machine \
+  --data-machine-code ../data-machine-code \
+  --agent sandbox-agent \
+  --task "Add a Dry Rub filter to the wing locations map" \
+  --provider openai \
+  --model gpt-5.5 \
   --json
 ```
 
-`extra_plugins` mounts local plugin checkouts into `/wordpress/wp-content/plugins/<slug>` and activates them before the workflow steps run. This lets recipes add WooCommerce, Data Machine, provider plugins, test helpers, or experimental runtime extensions without adding product-specific code to WP Codebox. `pluginFile` defaults to `<slug>/<slug>.php`; set it when the plugin entrypoint differs.
+Useful options:
 
-The Data Machine bundle example installs sibling `agents-api` and `data-machine` checkouts through `extra_plugins`, then mounts a small bundle directory that follows the same `manifest.json`, `memory/agent`, `pipelines`, and `flows` layout used by World of WordPress and WP Site Generator bundles:
+- `--provider-plugin <path>`: mount an AI provider plugin. Repeatable.
+- `--secret-env <NAME>`: expose a parent process environment variable by name. Repeatable. Values are read from the process environment and are not accepted in JSON payloads.
+- `--mount <host:vfs[:mode]>`: mount extra task inputs.
+- `--session-id <id>`: continue an existing sandbox conversation session.
+- `--max-turns <n>`: bound the agent loop.
+
+`--code` and `--code-file` still exist for operator/debug use after the agent stack boots. Product-facing task APIs should treat natural-language `--task` as the stable input shape and keep raw code execution gated away from untrusted frontend callers.
+
+### `agent-sandbox-batch`
+
+Run several task descriptions, one isolated sandbox per task, with bounded concurrency.
 
 ```bash
-npm run wp-codebox -- recipe-run \
-  --recipe ./examples/recipes/datamachine-agent-bundle.json \
+npm run wp-codebox -- agent-sandbox-batch \
+  --agents-api ../agents-api \
+  --data-machine ../data-machine \
+  --data-machine-code ../data-machine-code \
+  --task "Fix issue A" \
+  --task "Investigate issue B" \
+  --concurrency 2 \
   --json
 ```
 
-That recipe imports `examples/datamachine-bundle/world-creator-lite` inside the disposable Playground runtime through the generic `wordpress.ability` command and Data Machine's `datamachine/import-agent` ability. It proves the bundle shape without Homeboy in the path; Homeboy, Data Machine Code, wp-gym, or another controller can all consume the resulting WP Codebox artifact bundle.
-
-To run a different Data Machine-compatible bundle, change the bundle mount source while keeping the target path stable:
-
-```json
-{
-  "source": "../../../world-of-wordpress/bundles/world-creator",
-  "target": "/wordpress/wp-content/wp-codebox-inputs/datamachine-bundle",
-  "mode": "readwrite"
-}
-```
-
-Agent runtime awareness remains a bundle concern. A `wordpress_native_agent` can keep Data Machine's default context/directive behavior and know it is operating inside WordPress. A `blind_agent` can use Data Machine's `agent_config.directive_policy` to suppress runtime context before prompts are assembled, for example:
-
-```json
-{
-  "agent_config": {
-    "directive_policy": {
-      "mode": "allow_only",
-      "allow_only": []
-    }
-  }
-}
-```
-
-That keeps WP Codebox generic: the recipe defines the runtime ingredients, while the imported agent bundle decides whether the model should see WordPress/Data Machine context.
+Use `--tasks-json` or `--tasks-file` when the task list is generated by another system.
 
 ## Artifact Bundles
 
-Artifact capture is owned by WP Codebox because the runtime boundary knows what was mounted, what executed, and what must survive teardown. Agent frameworks and workspaces can mutate files inside the sandbox; WP Codebox captures the result from outside the sandbox before disposal.
+Artifact capture is owned by WP Codebox because WP Codebox knows what was mounted, what executed, and what must survive teardown.
 
 Current bundles include:
 
 - `manifest.json`: artifact index with content types.
-- `metadata.json`: runtime, policy, mounts, and collection metadata.
-- `blueprint.after.json`: WordPress Playground replay blueprint for WordPress-shaped runs.
-- `blueprint.after-notes.json`: replay status, limitations, and next capture targets.
+- `metadata.json`: runtime, policy, mounts, and caller metadata.
+- `blueprint.after.json`: partial WordPress Playground replay blueprint for captured text files.
+- `blueprint.after-notes.json`: replay limitations and next capture targets.
 - `events.jsonl`, `commands.jsonl`, `observations.jsonl`: runtime evidence streams.
 - `logs/runtime.log`, `logs/commands.log`: human-readable logs.
 - `files/mounts.json`: mounted input list.
 - `files/mounted-files.json`: captured readwrite mount files with size, SHA-256, target path, and replayability metadata.
-- `files/diffs.json`: diff index for readwrite mounts that declare a baseline, such as seeded workspaces.
-- `files/diffs/<mount>.patch`: unified text diff from the workspace seed to the cooked output.
+- `files/diffs.json`: diff index for readwrite mounts that declare a baseline.
+- `files/diffs/<mount>.patch`: unified text diff from a seeded baseline to the sandbox output.
 - `files/mounts/<index>/...`: copied file contents from readwrite mounts.
 
-For text files from readwrite mounts, `blueprint.after.json` includes `writeFile` steps so the files can be replayed into a fresh WordPress Playground runtime. Binary files and oversized files are copied into the artifact bundle but are not embedded in the blueprint yet. Database exports, option diffs, uploads, active theme/plugin state, and screenshots are planned capture targets.
+Binary files and oversized files are copied when allowed by capture limits but are not embedded into `blueprint.after.json`. Database exports, option diffs, uploaded media, active plugin/theme state, screenshots, normalized test results, and canonical apply-back patch metadata are still future artifact targets.
 
-Recipe runs also embed a `context.recipe` summary in `metadata.json` so artifacts remain self-describing after the sandbox is destroyed. Seeded workspaces include baseline metadata and emit patch files that show what changed from the scaffold or copied directory seed.
+## WordPress Plugin
 
-`blueprint.after.json` is backend-specific. It matters when the output should replay in WordPress Playground. Non-WordPress outputs still use the generic artifact contract: manifest, metadata, copied files, hashes, event streams, command logs, observations, patches, and future generic replay recipes.
-
-```text
-Sandbox mutates files/content
-  -> WP Codebox captures readwrite mounts and evidence
-  -> Sandbox is destroyed
-  -> Artifact bundle remains for review/replay/apply-back
-```
-
-## WordPress Ability Surface
-
-The WordPress plugin in `packages/wordpress-plugin` registers:
+The WordPress plugin registers parent-site abilities:
 
 - `wp-codebox/run-agent-task`
 - `wp-codebox/run-agent-task-batch`
 
-This is the parent-site control-plane surface for frontend/chat integrations. A chat agent can be granted this ability without receiving raw shell or parent-site filesystem access. The ability launches `wp-codebox agent-sandbox-run`, which boots a disposable WordPress Playground runtime, mounts the configured agent stack, invokes the sandbox agent through `agents/chat`, and returns artifact metadata.
+These abilities shell out to the local `wp-codebox` CLI, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
 
-For parallel cooking, `wp-codebox agent-sandbox-batch` and `wp-codebox/run-agent-task-batch` accept multiple tasks and run each task in its own isolated Playground sandbox with a bounded concurrency limit. This is the first coordinator primitive for issue fan-out: a parent can turn several GitHub issues into separate sandbox agent runs, and each sandbox agent is responsible for doing its own branch/test/PR work through the mounted coding tools.
+Component paths can come from ability input, the `wp_codebox_component_paths` option, or the `wp_codebox_component_paths` filter.
 
-Parent control planes can pass `provider` and `model` to seed the disposable sandbox's Data Machine agent configuration for the requested execution mode. Provider plugins are mounted through generic `--provider-plugin` CLI arguments or `provider_plugin_paths` ability input; WP Codebox does not know about specific providers. Provider credentials still resolve through the mounted provider's normal scoped mechanism, so raw API keys do not need to appear in task payloads. Use `--secret-env <NAME>` or ability input `secret_env: ["NAME"]` to allow-list a parent process environment variable for injection into the sandbox PHP process; artifacts record the env name, not the value.
+Expected component keys:
 
-Agent runtime commands also accept repeatable `--mount <host:vfs[:mode]>` values for additional task inputs. These mounts are generic WP Codebox inputs, not Homeboy/Data Machine concepts.
+- `agents_api`
+- `data_machine`
+- `data_machine_code`
+- `provider_plugins` (optional list)
 
-Component paths come from ability input, the `wp_codebox_component_paths` option, or the `wp_codebox_component_paths` filter. Data Machine Code is the mounted coding-tools component for file-editing agent sandboxes; it provides the workspace/file/GitHub tools inside the sandbox, while WP Codebox owns the parent-site control plane and sandbox lifecycle.
+The CLI binary can come from ability input, the `wp_codebox_bin` option, or the `wp_codebox_bin` filter.
 
-Apply-back is intentionally separate: sandbox task execution returns artifacts and proposed outputs, while applying changes to the real site should use a distinct reviewed permission path.
+Data Machine Code is a mounted coding-tools component inside the sandbox. It provides workspace/file/GitHub tools to the sandboxed agent. WP Codebox owns the parent-site ability surface, sandbox lifecycle, and artifact capture boundary.
 
-## v0 Runtime Policy
+Apply-back is intentionally not part of `run-agent-task`. Sandbox execution returns proposed outputs and evidence. Applying those outputs to a real site, opening a PR, exporting a package, approving files, or discarding artifacts should use separate reviewed abilities and policy.
 
-`RuntimePolicy` is a portable declaration that every backend receives with `RuntimeCreateSpec`. The core package exposes `validateRuntimePolicy()`, `assertRuntimePolicy()`, and `assertRuntimeCommandAllowed()` so backends and control planes can validate the v0 policy shape before work starts.
+## Runtime Policy
+
+`RuntimePolicy` declares the intended sandbox boundary and command allow-list.
 
 ```ts
-const result = validateRuntimePolicy({
+const policy = {
   network: "deny",
   filesystem: "readwrite-mounts",
   commands: ["wordpress.run-php"],
   secrets: "none",
   approvals: "never",
-})
+}
 ```
 
-Policy fields are split between **enforced now** and **declared for backend/control-plane enforcement**:
+Current enforcement:
 
-| Field | v0 values | Status |
-| --- | --- | --- |
-| `commands` | string command allow-list | Enforced by `assertRuntimeCommandAllowed()`; the Playground stub rejects commands outside the list. |
-| `network` | `allow`, `deny`, `{ allowHosts }` | Validated in core; declared for real backend enforcement. |
-| `filesystem` | `sandbox`, `readonly-mounts`, `readwrite-mounts` | Validated in core; declared for mount/backend enforcement. |
-| `secrets` | `none`, `connector-scoped` | Validated in core; declared for control planes that inject credentials. |
-| `approvals` | `never`, `on-write`, `on-command` | Validated in core; declared for product/control-plane approval UX. |
+| Field | Status |
+| --- | --- |
+| `commands` | Enforced by `assertRuntimeCommandAllowed()` before backend execution. |
+| `network` | Shape validated; real network enforcement is backend/control-plane work. |
+| `filesystem` | Shape validated; mount/write enforcement is backend/control-plane work. |
+| `secrets` | Shape validated; selected env var injection is allow-list based today. |
+| `approvals` | Shape validated; product approval UX is still separate work. |
 
-Disallowed commands throw `RuntimeCommandPolicyViolationError`. The error includes a stable `code`, denied `command`, `allowedCommands`, and the full `policy`, and serializes cleanly with `toJSON()` for artifact capture.
+## Boundaries
 
-## Non-Goals
+WP Codebox owns:
 
-- Replace Homeboy.
-- Replace Agents API.
-- Replace WP AI Client.
-- Implement provider auth or Codex integration in v0.
-- Couple the top-level contract to WordPress-specific concepts.
-- Couple runtime or artifact capture to Homeboy, Data Machine, wp-gym, or any other consumer.
+- Disposable runtime lifecycle.
+- Mounting inputs into Playground.
+- Controlled command execution.
+- Runtime event and artifact capture.
+- Parent-site ability surface for launching sandbox tasks.
 
-## Product Direction
+WP Codebox does not own:
 
-WP Codebox should make isolated app sandboxes usable from real-time products, not only CI or operator tools.
+- Agent identity, sessions, or model loop internals. Agents API and Data Machine own those.
+- Model provider authentication. Provider plugins and parent control planes own credentials.
+- Production mutation or deploy. Apply-back must be separate and reviewed.
+- CI/eval orchestration. Homeboy, wp-gym, or other consumers can invoke WP Codebox.
+- Frontend review UX. WP Codebox should produce renderable artifacts for those UIs.
 
-```text
-User request
-  -> control plane creates sandbox task
-  -> backend boots isolated runtime
-  -> agent or workflow acts inside the sandbox
-  -> runtime collects evidence and artifacts
-  -> user/app applies, exports, or discards the result
-```
+## Near-Term Gaps
 
-The first backend is WordPress Playground. Future consumers can include Studio, Data Machine Code, wp-gym, world-of-wordpress, WordPress.com product surfaces, and CI/eval runners. Homeboy Extensions is one adapter that can invoke WP Codebox in CI; WP Codebox itself remains consumer-agnostic.
+- Split raw operator/debug PHP execution away from product-facing task APIs.
+- Define canonical `patch.diff`, `changed-files.json`, content-addressed artifact IDs, and redaction guarantees.
+- Add list/get/discard/apply-approved artifact abilities to the WordPress plugin.
+- Define multi-user sandbox session lifecycle, retention, quotas, cancellation, and audit records.
+- Define reviewed apply-back adapters for bot-authored PRs, direct apply, and package export.
+- Add frontend progress/review payloads for non-technical site owners.
 
-## Related Issues
+## Development Notes
 
-- https://github.com/chubes4/wp-codebox/issues/1
-- https://github.com/chubes4/wp-codebox/issues/2
-- https://github.com/chubes4/wp-codebox/issues/3
-- https://github.com/chubes4/wp-codebox/issues/4
-- https://github.com/chubes4/wp-codebox/issues/5
-- https://github.com/chubes4/wp-codebox/issues/6
-- https://github.com/chubes4/wp-codebox/issues/7
+- Keep the runtime contract consumer-agnostic. Data Machine, Homeboy, Studio, wp-gym, and WordPress.com are consumers or mounted tools, not owners of the core artifact contract.
+- Prefer small seams: runtime lifecycle, command handlers, artifact capture, recipes, WordPress integration, and apply-back should stay separate.
+- When adding a new command or artifact type, update this README and `npm run check`.
