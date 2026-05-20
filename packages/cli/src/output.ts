@@ -128,9 +128,6 @@ export function printHelp(): void {
   wp-codebox recipe validate --recipe <path> [--json]
   wp-codebox recipe-run --recipe <path> [options]
   wp-codebox run --mount <host>:<vfs> --command <id> [options]
-  wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> [options]
-  wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [options]
-  wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [--task <text> ...] [options]
 
 Options:
   --recipe <path>     Workspace recipe JSON file for recipe-run or recipe validate.
@@ -141,32 +138,6 @@ Options:
   --artifacts <dir>    Artifact root directory.
   --policy <json|file> Runtime policy JSON or path to a JSON file.
   --json               Emit machine-readable JSON.
-
-Agent runtime probe options:
-  --agents-api <path>         Local Agents API plugin checkout.
-  --data-machine <path>       Local Data Machine plugin checkout.
-  --data-machine-code <path>  Local Data Machine Code plugin checkout.
-  --provider-plugin <path>    Local AI provider plugin checkout. Repeatable.
-  --mount <host:vfs>          Extra host path to mount into the runtime. Repeatable.
-
-Agent sandbox run options:
-  --task <text>               Task description recorded in the sandbox run.
-  --agent <slug>              Agent slug to invoke through the canonical agents/chat ability.
-  --mode <slug>               Agent execution mode. Defaults to sandbox.
-  --provider <id>             AI provider id to seed into the sandbox agent config.
-  --model <id>                AI model id to seed into the sandbox agent config.
-  --secret-env <name>         Parent environment variable to expose inside the sandbox. Repeatable.
-  --session-id <id>           Existing sandbox conversation session id.
-  --max-turns <n>             Maximum agent loop turns for the sandbox task.
-  --code <php>                Optional PHP body to run after the agent stack boots.
-  --code-file <path>          Optional PHP file to run after the agent stack boots.
-
-Agent sandbox batch options:
-  --task <text>               Task to run in its own isolated sandbox. Repeatable.
-  --tasks-json <json>         JSON array of task strings or objects with a task string.
-  --tasks-file <path>         File containing a JSON task array.
-  --secret-env <name>         Parent environment variable to expose inside each sandbox. Repeatable.
-  --concurrency <n>           Maximum concurrent sandboxes. Defaults to 2.
 
 Example:
   wp-codebox run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json`)

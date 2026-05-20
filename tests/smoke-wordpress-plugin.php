@@ -124,11 +124,15 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_default_model'] = 'gpt-5.5';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI_API_KEY' );
 
 $captured_command = '';
+$captured_recipe  = '';
 $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 	array(
 		'shell_available' => fn() => true,
-		'command_runner'  => function ( string $command ) use ( &$captured_command ): array {
+		'command_runner'  => function ( string $command ) use ( &$captured_command, &$captured_recipe ): array {
 			$captured_command = $command;
+			if ( preg_match( "/--recipe '([^']+)'/", $command, $matches ) && is_readable( $matches[1] ) ) {
+				$captured_recipe = (string) file_get_contents( $matches[1] );
+			}
 			return array(
 				'exit_code' => 0,
 				'output'    => json_encode(
@@ -152,15 +156,16 @@ $result = $runner->run(
 $assert( 'runner succeeds with filter-provided component paths', ! is_wp_error( $result ) && true === ( $result['success'] ?? false ) );
 $assert( 'runner schema is stable', ! is_wp_error( $result ) && 'wp-codebox/agent-task-run/v1' === ( $result['schema'] ?? '' ) );
 $assert( 'runner returns normalized task input for legacy task', ! is_wp_error( $result ) && 'wp-codebox/task-input/v1' === ( $result['task_input']['schema'] ?? '' ) && 'Run a chat-requested sandbox task.' === ( $result['task_input']['goal'] ?? '' ) );
-$assert( 'runner invokes agent-sandbox-run', str_contains( $captured_command, 'agent-sandbox-run' ) );
+$assert( 'runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
 $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node ' ) );
-$assert( 'runner passes task', str_contains( $captured_command, '--task' ) );
-$assert( 'runner passes default agent', str_contains( $captured_command, '--agent' ) && str_contains( $captured_command, 'site-coder' ) );
-$assert( 'runner passes sandbox mode', str_contains( $captured_command, '--mode' ) && str_contains( $captured_command, 'sandbox' ) );
-$assert( 'runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
-$assert( 'runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
-$assert( 'runner passes provider plugin path', str_contains( $captured_command, '--provider-plugin' ) && str_contains( $captured_command, 'ai-provider-test' ) );
-$assert( 'runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
+$assert( 'runner recipe uses agent step', str_contains( $captured_recipe, 'wp-codebox.agent-sandbox-run' ) );
+$assert( 'runner recipe passes task', str_contains( $captured_recipe, 'Run a chat-requested sandbox task.' ) );
+$assert( 'runner recipe passes default agent', str_contains( $captured_recipe, 'site-coder' ) );
+$assert( 'runner recipe passes sandbox mode', str_contains( $captured_recipe, 'sandbox' ) );
+$assert( 'runner recipe passes default provider', str_contains( $captured_recipe, 'openai' ) );
+$assert( 'runner recipe passes default model', str_contains( $captured_recipe, 'gpt-5.5' ) );
+$assert( 'runner recipe passes provider plugin path', str_contains( $captured_recipe, 'ai-provider-test' ) );
+$assert( 'runner recipe passes secret env name only', str_contains( $captured_recipe, 'OPENAI_API_KEY' ) );
 $assert( 'runner does not pass raw code options', ! str_contains( $captured_command, '--code ' ) && ! str_contains( $captured_command, '--code-file' ) );
 
 $raw_code = $runner->run(
@@ -199,7 +204,7 @@ $structured_result = $runner->run(
 $assert( 'runner accepts structured task input', ! is_wp_error( $structured_result ) && 'Add a focused product feature.' === ( $structured_result['task_input']['goal'] ?? '' ) );
 $assert( 'runner preserves structured target', ! is_wp_error( $structured_result ) && 'plugin' === ( $structured_result['task_input']['target']['kind'] ?? '' ) );
 $assert( 'runner normalizes task input lists', ! is_wp_error( $structured_result ) && array( 'workspace.read', 'workspace.write' ) === ( $structured_result['task_input']['allowed_tools'] ?? array() ) && array( 'patch', 'tests' ) === ( $structured_result['task_input']['expected_artifacts'] ?? array() ) );
-$assert( 'runner passes structured task contract to CLI', str_contains( $captured_command, 'wp-codebox/task-input/v1' ) && str_contains( $captured_command, 'allowed_tools' ) );
+$assert( 'runner passes structured task contract to recipe', str_contains( $captured_recipe, 'wp-codebox/task-input/v1' ) && str_contains( $captured_recipe, 'allowed_tools' ) );
 
 $batch_result = $runner->run_batch(
 	array(
@@ -212,13 +217,13 @@ $batch_result = $runner->run_batch(
 $assert( 'batch runner succeeds with filter-provided component paths', ! is_wp_error( $batch_result ) && true === ( $batch_result['success'] ?? false ) );
 $assert( 'batch runner schema is stable', ! is_wp_error( $batch_result ) && 'wp-codebox/agent-task-batch/v1' === ( $batch_result['schema'] ?? '' ) );
 $assert( 'batch runner returns normalized task inputs', ! is_wp_error( $batch_result ) && 2 === count( $batch_result['task_inputs'] ?? array() ) && 'Fix issue one.' === ( $batch_result['task_inputs'][0]['goal'] ?? '' ) );
-$assert( 'batch runner invokes agent-sandbox-batch', str_contains( $captured_command, 'agent-sandbox-batch' ) );
-$assert( 'batch runner passes repeated tasks', 2 === substr_count( $captured_command, '--task' ) );
-$assert( 'batch runner passes concurrency', str_contains( $captured_command, '--concurrency' ) && str_contains( $captured_command, '2' ) );
-$assert( 'batch runner passes default provider', str_contains( $captured_command, '--provider' ) && str_contains( $captured_command, 'openai' ) );
-$assert( 'batch runner passes default model', str_contains( $captured_command, '--model' ) && str_contains( $captured_command, 'gpt-5.5' ) );
-$assert( 'batch runner passes provider plugin path', str_contains( $captured_command, '--provider-plugin' ) && str_contains( $captured_command, 'ai-provider-test' ) );
-$assert( 'batch runner passes secret env name only', str_contains( $captured_command, '--secret-env' ) && str_contains( $captured_command, 'OPENAI_API_KEY' ) );
+$assert( 'batch runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
+$assert( 'batch runner emits repeated agent steps', 2 === substr_count( $captured_recipe, 'wp-codebox.agent-sandbox-run' ) );
+$assert( 'batch runner preserves requested concurrency', 2 === ( $batch_result['concurrency'] ?? 0 ) );
+$assert( 'batch runner recipe passes default provider', str_contains( $captured_recipe, 'openai' ) );
+$assert( 'batch runner recipe passes default model', str_contains( $captured_recipe, 'gpt-5.5' ) );
+$assert( 'batch runner recipe passes provider plugin path', str_contains( $captured_recipe, 'ai-provider-test' ) );
+$assert( 'batch runner recipe passes secret env name only', str_contains( $captured_recipe, 'OPENAI_API_KEY' ) );
 
 $missing_task = $runner->run( array( 'artifacts_path' => $root . '/artifacts' ) );
 $assert( 'missing task fails closed', is_wp_error( $missing_task ) && 'wp_codebox_task_missing' === $missing_task->get_error_code() );

@@ -62,38 +62,20 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			return new WP_Error( 'wp_codebox_bin_invalid', 'wp_codebox_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
 		}
 
+		$recipe_file = $this->write_agent_recipe( $paths, $input, array( $task_prompt ), $wp_version );
+		if ( is_wp_error( $recipe_file ) ) {
+			return $recipe_file;
+		}
+
 		$command = sprintf(
-			'%s agent-sandbox-run --agents-api %s --data-machine %s --data-machine-code %s --task %s --agent %s --mode %s --provider %s --model %s --wp %s --artifacts %s --json',
+			'%s recipe-run --recipe %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
-			escapeshellarg( $paths['agents_api'] ),
-			escapeshellarg( $paths['data_machine'] ),
-			escapeshellarg( $paths['data_machine_code'] ),
-			escapeshellarg( $task_prompt ),
-			escapeshellarg( $this->agent_slug( $input ) ),
-			escapeshellarg( $this->mode( $input ) ),
-			escapeshellarg( $this->provider( $input ) ),
-			escapeshellarg( $this->model( $input ) ),
-			escapeshellarg( $wp_version ),
+			escapeshellarg( $recipe_file ),
 			escapeshellarg( $artifacts )
 		);
 
-		foreach ( $this->provider_plugin_paths( $input ) as $provider_plugin_path ) {
-			$command .= ' --provider-plugin ' . escapeshellarg( $provider_plugin_path );
-		}
-
-		if ( ! empty( $input['session_id'] ) ) {
-			$command .= ' --session-id ' . escapeshellarg( (string) $input['session_id'] );
-		}
-
-		if ( ! empty( $input['max_turns'] ) ) {
-			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
-		}
-
-		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
-			$command .= ' --secret-env ' . escapeshellarg( $secret_env );
-		}
-
 		$result    = $this->run_command( $command );
+		@unlink( $recipe_file );
 		$exit_code = (int) ( $result['exit_code'] ?? 1 );
 		$output    = (string) ( $result['output'] ?? '' );
 		$decoded   = $this->decode_json_output( $output );
@@ -175,38 +157,20 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		$concurrency = max( 1, (int) ( $input['concurrency'] ?? 2 ) );
-		$command     = sprintf(
-			'%s agent-sandbox-batch --agents-api %s --data-machine %s --data-machine-code %s --agent %s --mode %s --provider %s --model %s --concurrency %s --wp %s --artifacts %s --json',
+		$recipe_file = $this->write_agent_recipe( $paths, $input, $task_prompts, $wp_version );
+		if ( is_wp_error( $recipe_file ) ) {
+			return $recipe_file;
+		}
+
+		$command = sprintf(
+			'%s recipe-run --recipe %s --artifacts %s --json',
 			$this->command_prefix( $bin ),
-			escapeshellarg( $paths['agents_api'] ),
-			escapeshellarg( $paths['data_machine'] ),
-			escapeshellarg( $paths['data_machine_code'] ),
-			escapeshellarg( $this->agent_slug( $input ) ),
-			escapeshellarg( $this->mode( $input ) ),
-			escapeshellarg( $this->provider( $input ) ),
-			escapeshellarg( $this->model( $input ) ),
-			escapeshellarg( (string) $concurrency ),
-			escapeshellarg( $wp_version ),
+			escapeshellarg( $recipe_file ),
 			escapeshellarg( $artifacts )
 		);
 
-		foreach ( $this->provider_plugin_paths( $input ) as $provider_plugin_path ) {
-			$command .= ' --provider-plugin ' . escapeshellarg( $provider_plugin_path );
-		}
-
-		if ( ! empty( $input['max_turns'] ) ) {
-			$command .= ' --max-turns ' . escapeshellarg( (string) max( 1, (int) $input['max_turns'] ) );
-		}
-
-		foreach ( $this->secret_env_names( $input ) as $secret_env ) {
-			$command .= ' --secret-env ' . escapeshellarg( $secret_env );
-		}
-
-		foreach ( $task_prompts as $task_prompt ) {
-			$command .= ' --task ' . escapeshellarg( $task_prompt );
-		}
-
 		$result    = $this->run_command( $command );
+		@unlink( $recipe_file );
 		$exit_code = (int) ( $result['exit_code'] ?? 1 );
 		$output    = (string) ( $result['output'] ?? '' );
 		$decoded   = $this->decode_json_output( $output );
@@ -521,6 +485,79 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		return escapeshellarg( $bin );
+	}
+
+	/**
+	 * @param array{agents_api:string,data_machine:string,data_machine_code:string} $paths Component paths.
+	 * @param array<string,mixed> $input Ability input.
+	 * @param string[] $task_prompts Encoded task prompts.
+	 */
+	private function write_agent_recipe( array $paths, array $input, array $task_prompts, string $wp_version ): string|WP_Error {
+		$provider_plugins = array_map(
+			fn( string $path ): array => array(
+				'source'   => $path,
+				'slug'     => basename( $path ),
+				'activate' => false,
+			),
+			$this->provider_plugin_paths( $input )
+		);
+
+		$provider_slugs = array_map( static fn( array $plugin ): string => (string) $plugin['slug'], $provider_plugins );
+		$steps          = array();
+		foreach ( $task_prompts as $task_prompt ) {
+			$args = array(
+				'task=' . $task_prompt,
+				'agent=' . $this->agent_slug( $input ),
+				'mode=' . $this->mode( $input ),
+				'provider=' . $this->provider( $input ),
+				'model=' . $this->model( $input ),
+				'provider-plugin-slugs=' . implode( ',', $provider_slugs ),
+			);
+			if ( ! empty( $input['session_id'] ) ) {
+				$args[] = 'session-id=' . (string) $input['session_id'];
+			}
+			if ( ! empty( $input['max_turns'] ) ) {
+				$args[] = 'max-turns=' . (string) max( 1, (int) $input['max_turns'] );
+			}
+
+			$steps[] = array(
+				'command' => 'wp-codebox.agent-sandbox-run',
+				'args'    => $args,
+			);
+		}
+
+		$recipe = array(
+			'schema'   => 'wp-codebox/workspace-recipe/v1',
+			'runtime'  => array(
+				'wp'        => $wp_version,
+				'blueprint' => array( 'steps' => array() ),
+			),
+			'inputs'   => array(
+				'extraPlugins' => array_merge(
+					array(
+						array( 'source' => $paths['agents_api'], 'slug' => 'agents-api', 'activate' => false ),
+						array( 'source' => $paths['data_machine'], 'slug' => 'data-machine', 'activate' => false ),
+						array( 'source' => $paths['data_machine_code'], 'slug' => 'data-machine-code', 'activate' => false ),
+					),
+					$provider_plugins
+				),
+				'secretEnv'    => $this->secret_env_names( $input ),
+			),
+			'workflow' => array( 'steps' => $steps ),
+		);
+
+		$file = tempnam( sys_get_temp_dir(), 'wp-codebox-recipe-' );
+		if ( false === $file ) {
+			return new WP_Error( 'wp_codebox_recipe_temp_failed', 'Could not create a temporary WP Codebox recipe.', array( 'status' => 500 ) );
+		}
+
+		$encoded = function_exists( 'wp_json_encode' ) ? wp_json_encode( $recipe, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) : json_encode( $recipe, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+		if ( ! is_string( $encoded ) || false === file_put_contents( $file, $encoded ) ) {
+			@unlink( $file );
+			return new WP_Error( 'wp_codebox_recipe_write_failed', 'Could not write the temporary WP Codebox recipe.', array( 'status' => 500 ) );
+		}
+
+		return $file;
 	}
 
 	private function generate_run_id(): string {

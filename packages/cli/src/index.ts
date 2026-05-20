@@ -152,7 +152,7 @@ const defaultPolicy: RuntimePolicy = {
 
 const WP_CODEBOX_RUNTIME_VERSION = "0.0.0"
 const DEFAULT_WORDPRESS_VERSION = "7.0"
-const supportedRecipeCommands = new Set(["inspect-mounted-inputs", "wordpress.run-php", "wordpress.wp-cli", "wordpress.ability", "wordpress.bench"])
+const supportedRecipeCommands = new Set(["inspect-mounted-inputs", "wordpress.run-php", "wordpress.wp-cli", "wordpress.ability", "wordpress.bench", "wp-codebox.agent-runtime-probe", "wp-codebox.agent-sandbox-run"])
 
 const secretEnvPolicy: RuntimePolicy = {
   ...defaultPolicy,
@@ -202,56 +202,6 @@ async function main(args: string[]): Promise<number> {
     return output.success ? 0 : 1
   }
 
-  if (command === "agent-runtime-probe") {
-    const options = parseAgentRuntimeProbeOptions(args)
-    const runOptions = await agentRuntimeProbeRunOptions(options)
-    const execute = () => run(runOptions)
-
-    if (!options.json) {
-      const output = await execute()
-      printHumanOutput(output)
-      return output.success ? 0 : 1
-    }
-
-    const { result, logs } = await captureStdout(execute)
-    const output = logs.length > 0 ? { ...result, logs } : result
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
-    return output.success ? 0 : 1
-  }
-
-  if (command === "agent-sandbox-run") {
-    const options = parseAgentSandboxRunOptions(args)
-    const runOptions = await agentSandboxRunOptions(options)
-    const execute = () => run(runOptions)
-
-    if (!options.json) {
-      const output = await execute()
-      printHumanOutput(output)
-      return output.success ? 0 : 1
-    }
-
-    const { result, logs } = await captureStdout(execute)
-    const output = logs.length > 0 ? { ...result, logs } : result
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
-    return output.success ? 0 : 1
-  }
-
-  if (command === "agent-sandbox-batch") {
-    const options = await parseAgentSandboxBatchOptions(args)
-    const execute = () => runAgentSandboxBatch(options)
-
-    if (!options.json) {
-      const output = await execute()
-      printBatchHumanOutput(output)
-      return output.success ? 0 : 1
-    }
-
-    const { result, logs } = await captureStdout(execute)
-    const output = logs.length > 0 ? { ...result, logs } : result
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
-    return output.success ? 0 : 1
-  }
-
   if (command !== "run") {
     console.error(`Unknown command: ${command}`)
     printHelp()
@@ -271,55 +221,6 @@ async function main(args: string[]): Promise<number> {
   const output = logs.length > 0 ? { ...result, logs } : result
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   return output.success ? 0 : 1
-}
-
-async function agentRuntimeProbeRunOptions(options: AgentRuntimeProbeOptions): Promise<RunOptions> {
-  return {
-    mounts: agentRuntimeMounts(options),
-    command: "wordpress.run-php",
-    args: [`code=${agentRuntimeProbeCode(providerPluginMounts(options))}`],
-    wpVersion: options.wpVersion ?? DEFAULT_WORDPRESS_VERSION,
-    artifactsDirectory: options.artifactsDirectory,
-    metadata: agentRuntimeMetadata(options),
-    ...await runSecretEnvOptions(options),
-    json: options.json,
-  }
-}
-
-async function agentSandboxRunOptions(options: AgentSandboxRunOptions): Promise<RunOptions> {
-  return {
-    mounts: agentRuntimeMounts(options),
-    command: "wordpress.run-php",
-    args: [`code=${agentSandboxRunCode(options.task, await resolveSandboxTaskCode(options), providerPluginMounts(options))}`],
-    wpVersion: options.wpVersion ?? DEFAULT_WORDPRESS_VERSION,
-    artifactsDirectory: options.artifactsDirectory,
-    metadata: agentSandboxRunMetadata(options),
-    ...await runSecretEnvOptions(options),
-    json: options.json,
-  }
-}
-
-async function runAgentSandboxBatch(options: AgentSandboxBatchOptions): Promise<AgentSandboxBatchOutput> {
-  const concurrency = positiveInteger(options.concurrency, 2)
-  const runs = await mapWithConcurrency(options.tasks, concurrency, async (task, index) => {
-    const runOptions = await agentSandboxRunOptions({
-      ...options,
-      task,
-    })
-    const output = await run(runOptions)
-    return { ...output, index, task }
-  })
-  const failed = runs.filter((run) => !run.success).length
-
-  return {
-    success: failed === 0,
-    schema: "wp-codebox/agent-sandbox-batch/v1",
-    concurrency,
-    total: runs.length,
-    completed: runs.length - failed,
-    failed,
-    runs,
-  }
 }
 
 async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
@@ -389,7 +290,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
     }
 
     for (const step of recipe.workflow.steps) {
-      executions.push(await runtime.execute({ command: step.command, args: step.args ?? [] }))
+      executions.push(await runtime.execute(await recipeExecutionSpec(step, recipeDirectory)))
     }
 
     await runtime.observe({ type: "runtime-info" })
@@ -522,6 +423,55 @@ function componentMount(source: string, target: string, slug: string): RunOption
       slug,
     },
   }
+}
+
+async function recipeExecutionSpec(step: WorkspaceRecipe["workflow"]["steps"][number], recipeDirectory: string): Promise<{ command: string; args: string[] }> {
+  if (step.command === "wp-codebox.agent-runtime-probe") {
+    return {
+      command: "wordpress.run-php",
+      args: [`code=${agentRuntimeProbeCode(providerPluginSlugs(step.args ?? []).map((slug) => ({ source: "", slug })))}`],
+    }
+  }
+
+  if (step.command === "wp-codebox.agent-sandbox-run") {
+    const args = step.args ?? []
+    const task = argValue(args, "task")
+    if (!task) {
+      throw new Error("wp-codebox.agent-sandbox-run requires task=<task>")
+    }
+
+    const codeFile = argValue(args, "code-file")
+    const code = argValue(args, "code")
+    if (code && codeFile) {
+      throw new Error("Use either code=<php> or code-file=<path>, not both")
+    }
+    const body = codeFile ? await readFile(resolve(recipeDirectory, codeFile), "utf8") : (code ?? await resolveSandboxTaskCode({
+      task,
+      agent: argValue(args, "agent"),
+      mode: argValue(args, "mode"),
+      provider: argValue(args, "provider"),
+      model: argValue(args, "model"),
+      sessionId: argValue(args, "session-id"),
+      maxTurns: argValue(args, "max-turns"),
+    }))
+
+    return {
+      command: "wordpress.run-php",
+      args: [`code=${agentSandboxRunCode(task, body, providerPluginSlugs(args).map((slug) => ({ source: "", slug })))}`],
+    }
+  }
+
+  return { command: step.command, args: step.args ?? [] }
+}
+
+function argValue(args: string[], name: string): string | undefined {
+  const prefix = `${name}=`
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length)
+}
+
+function providerPluginSlugs(args: string[]): string[] {
+  const csv = argValue(args, "provider-plugin-slugs") ?? ""
+  return csv.split(",").map((slug) => slug.trim()).filter(Boolean)
 }
 
 function providerPluginMounts(options: AgentRuntimeProbeOptions): Array<{ source: string; slug: string }> {
@@ -1238,7 +1188,7 @@ function recipeWpCliCommandFromArgs(args: string[]): string {
 }
 
 function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
-  const commands = recipe.workflow.steps.map((step) => step.command)
+  const commands = recipe.workflow.steps.map((step) => step.command.startsWith("wp-codebox.agent-") ? "wordpress.run-php" : step.command)
   if (recipeExtraPlugins(recipe).some((plugin) => plugin.activate !== false)) {
     commands.unshift("wordpress.run-php")
   }
