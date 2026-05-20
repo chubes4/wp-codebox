@@ -53,7 +53,8 @@ export interface BenchRunCodeOptions {
 
 export interface PhpunitRunCodeOptions {
   pluginSlug: string
-  bootstrapFile: string
+  autoloadFile: string
+  testsDir: string
   phpunitXml: string
   selectedTestFile: string
   changedTestFiles: unknown[]
@@ -71,14 +72,412 @@ $plugin_slug = ${JSON.stringify(options.pluginSlug)};
 $plugin_path = '/wordpress/wp-content/plugins/' . $plugin_slug;
 $result_file = $plugin_path . '/.pg-test-result.txt';
 $current_stage = 'preboot';
-$tests_dir = '/homeboy-extension/vendor/wp-phpunit/wp-phpunit';
+$autoload_file = ${JSON.stringify(options.autoloadFile)};
+$tests_dir = ${JSON.stringify(options.testsDir)};
 $selected_test_file = ${JSON.stringify(options.selectedTestFile)};
 $changed_test_files_raw = ${JSON.stringify(JSON.stringify(options.changedTestFiles))};
 $bench_env = json_decode(${JSON.stringify(JSON.stringify(options.env))}, true);
 $wp_config_defines = json_decode(${JSON.stringify(JSON.stringify(options.wpConfigDefines))}, true);
 $dep_mounts = ${JSON.stringify(options.dependencyMounts.join("\\n"))};
 
-require_once ${JSON.stringify(options.bootstrapFile)};
+function pg_log($msg) {
+    global $result_file;
+    file_put_contents($result_file, $msg . "\n", FILE_APPEND);
+}
+
+function pg_diagnostic_context(): string {
+    global $current_stage;
+    $hook = function_exists('current_filter') ? current_filter() : null;
+    if (!is_string($hook) || $hook === '') {
+        $hook = 'none';
+    }
+    $installing = function_exists('wp_installing') && wp_installing() ? 'true' : 'false';
+    return 'stage=' . ($current_stage ?: 'unknown') . ' hook=' . $hook . ' wp_installing=' . $installing;
+}
+
+function &pg_stage_timings_ref(): array {
+    static $timings = array('_starts_ns' => array(), '_durations_ms' => array());
+    return $timings;
+}
+
+function pg_stage_begin($stage) {
+    global $current_stage;
+    $current_stage = $stage;
+    $timings = &pg_stage_timings_ref();
+    $timings['_starts_ns'][$stage] = hrtime(true);
+    pg_log('STAGE_BEGIN:' . $stage);
+}
+
+function pg_stage_ok($stage) {
+    $timings = &pg_stage_timings_ref();
+    if (isset($timings['_starts_ns'][$stage])) {
+        $timings['_durations_ms'][$stage] = (hrtime(true) - $timings['_starts_ns'][$stage]) / 1000000;
+    }
+    pg_log('STAGE_OK:' . $stage);
+}
+
+function pg_stage_fail($stage, Throwable $e) {
+    pg_log('STAGE_FAIL:' . $stage . ':' . get_class($e) . ': ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+    pg_log('TRACE:');
+    foreach (explode("\n", $e->getTraceAsString()) as $line) {
+        pg_log('  ' . $line);
+    }
+}
+
+function pg_install_diagnostics_handlers() {
+    set_error_handler(function ($severity, $message, $file, $line) {
+        if (!(error_reporting() & $severity)) {
+            return false;
+        }
+        $labels = array(E_WARNING => 'WARNING', E_NOTICE => 'NOTICE', E_DEPRECATED => 'DEPRECATED', E_USER_WARNING => 'USER_WARNING', E_USER_NOTICE => 'USER_NOTICE', E_USER_DEPRECATED => 'USER_DEPRECATED', E_STRICT => 'STRICT');
+        pg_log('NOTICE:' . ($labels[$severity] ?? ('E_' . $severity)) . ': ' . $message . ' at ' . $file . ':' . $line . ' context=' . pg_diagnostic_context());
+        return false;
+    });
+    register_shutdown_function(function () {
+        global $current_stage;
+        $error = error_get_last();
+        if ($error && in_array($error['type'], array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR), true)) {
+            pg_log('STAGE_FATAL:' . $current_stage . ':' . $error['message'] . ' at ' . $error['file'] . ':' . $error['line']);
+        }
+    });
+}
+
+function pg_snapshot_wordpress_hook_callbacks(string $hook_name): array {
+    global $wp_filter;
+    $snapshot = array();
+    if (!isset($wp_filter[$hook_name]) || !isset($wp_filter[$hook_name]->callbacks)) {
+        return $snapshot;
+    }
+    foreach ($wp_filter[$hook_name]->callbacks as $priority => $callbacks) {
+        foreach (array_keys($callbacks) as $callback_id) {
+            $snapshot[$priority . ':' . $callback_id] = true;
+        }
+    }
+    return $snapshot;
+}
+
+function pg_remove_new_wordpress_hook_callbacks(string $hook_name, array $before): void {
+    global $wp_filter;
+    if (!isset($wp_filter[$hook_name]) || !isset($wp_filter[$hook_name]->callbacks)) {
+        return;
+    }
+    foreach ($wp_filter[$hook_name]->callbacks as $priority => $callbacks) {
+        foreach (array_keys($callbacks) as $callback_id) {
+            if (!isset($before[$priority . ':' . $callback_id])) {
+                unset($wp_filter[$hook_name]->callbacks[$priority][$callback_id]);
+            }
+        }
+        if (empty($wp_filter[$hook_name]->callbacks[$priority])) {
+            unset($wp_filter[$hook_name]->callbacks[$priority]);
+        }
+    }
+}
+
+function pg_defer_new_wordpress_hook_callbacks(string $hook_name, array $before): array {
+    global $wp_filter;
+    $deferred = array();
+    if (!isset($wp_filter[$hook_name]) || !isset($wp_filter[$hook_name]->callbacks)) {
+        return $deferred;
+    }
+    foreach ($wp_filter[$hook_name]->callbacks as $priority => $callbacks) {
+        foreach ($callbacks as $callback_id => $callback) {
+            if (isset($before[$priority . ':' . $callback_id])) {
+                continue;
+            }
+            $deferred[] = array('priority' => (int) $priority, 'callback' => $callback);
+            unset($wp_filter[$hook_name]->callbacks[$priority][$callback_id]);
+        }
+        if (empty($wp_filter[$hook_name]->callbacks[$priority])) {
+            unset($wp_filter[$hook_name]->callbacks[$priority]);
+        }
+    }
+    usort($deferred, static function (array $left, array $right): int { return $left['priority'] <=> $right['priority']; });
+    return $deferred;
+}
+
+function pg_run_deferred_wordpress_hook_callbacks(array $deferred, array $args = array(), ?string $hook_name = null): void {
+    global $wp_current_filter;
+    $pushed_hook = false;
+    if (is_string($hook_name) && $hook_name !== '') {
+        if (!is_array($wp_current_filter)) {
+            $wp_current_filter = array();
+        }
+        $wp_current_filter[] = $hook_name;
+        $pushed_hook = true;
+    }
+    try {
+        foreach ($deferred as $entry) {
+            $callback = $entry['callback'] ?? null;
+            if (!is_array($callback) || !isset($callback['function'])) {
+                continue;
+            }
+            $accepted_args = isset($callback['accepted_args']) ? (int) $callback['accepted_args'] : count($args);
+            call_user_func_array($callback['function'], array_slice($args, 0, $accepted_args));
+        }
+    } finally {
+        if ($pushed_hook) {
+            array_pop($wp_current_filter);
+        }
+    }
+}
+
+function pg_reopen_wordpress_action(string $hook_name): bool {
+    global $wp_actions;
+    if (!function_exists('did_action') || did_action($hook_name) === 0) {
+        return false;
+    }
+    if (!is_array($wp_actions)) {
+        $wp_actions = array();
+    }
+    $wp_actions[$hook_name] = 0;
+    pg_log('NOTICE:reopened WordPress action after install: ' . $hook_name);
+    return true;
+}
+
+function pg_fire_reopened_wordpress_action(string $hook_name, bool $reopened): void {
+    if ($reopened && function_exists('do_action')) {
+        do_action($hook_name);
+    }
+}
+
+function pg_preload_wp_cli_namespaced_functions(): void {
+    global $autoload_file;
+    $vendor_dir = dirname($autoload_file);
+    $wp_cli_root = $vendor_dir . '/wp-cli/wp-cli';
+    if (!defined('WP_CLI_ROOT')) {
+        define('WP_CLI_ROOT', $wp_cli_root);
+    }
+    if (!defined('WP_CLI_VENDOR_DIR')) {
+        define('WP_CLI_VENDOR_DIR', $vendor_dir);
+    }
+    if (!defined('WP_CLI_VERSION') && is_readable($wp_cli_root . '/VERSION')) {
+        define('WP_CLI_VERSION', trim(file_get_contents($wp_cli_root . '/VERSION')));
+    }
+    if (!defined('WP_CLI_START_MICROTIME')) {
+        define('WP_CLI_START_MICROTIME', microtime(true));
+    }
+    if (!function_exists('WP_CLI\\Utils\\parse_str_to_argv') && is_readable($wp_cli_root . '/php/utils.php')) {
+        require_once $wp_cli_root . '/php/utils.php';
+    }
+    if (!function_exists('WP_CLI\\Dispatcher\\get_path') && is_readable($wp_cli_root . '/php/dispatcher.php')) {
+        require_once $wp_cli_root . '/php/dispatcher.php';
+    }
+    if (!function_exists('WP_CLI\\Utils\\get_upgrader') && is_readable($wp_cli_root . '/php/utils-wp.php')) {
+        require_once $wp_cli_root . '/php/utils-wp.php';
+    }
+}
+
+function pg_run_boot_stage(array $cfg = []): ?string {
+    global $autoload_file;
+    pg_stage_begin('boot');
+    try {
+        $extra_defines = $cfg['extra_defines'] ?? array();
+        $config_path = '/tmp/wp-tests-config.php';
+        $config = "<?php\n";
+        if (!empty($extra_defines) && is_array($extra_defines)) {
+            $config .= "\n// Recipe-declared wp-config defines.\n";
+            foreach ($extra_defines as $name => $value) {
+                if (!is_string($name) || !preg_match('/^[A-Z_][A-Z0-9_]*$/i', $name)) {
+                    pg_log('NOTICE: skipping invalid wp_config_defines key: ' . var_export($name, true));
+                    continue;
+                }
+                $config .= sprintf("if (!defined('%s')) { define('%s', %s); }\n", $name, $name, var_export($value, true));
+            }
+        }
+        $config .= <<<'CONFIG'
+$table_prefix = 'wptests_';
+define('DB_NAME', ':memory:');
+define('DB_USER', 'root');
+define('DB_PASSWORD', '');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8');
+define('WP_TESTS_DOMAIN', 'example.org');
+define('WP_TESTS_EMAIL', 'admin@example.org');
+define('WP_TESTS_TITLE', 'Test Blog');
+define('WP_PHP_BINARY', 'php');
+define('ABSPATH', '/wordpress/');
+define('FS_CHMOD_FILE', 0644);
+define('FS_CHMOD_DIR', 0755);
+define('FS_METHOD', 'direct');
+CONFIG;
+        file_put_contents($config_path, $config);
+        pg_preload_wp_cli_namespaced_functions();
+        require_once $autoload_file;
+        pg_stage_ok('boot');
+        return $config_path;
+    } catch (Throwable $e) {
+        pg_stage_fail('boot', $e);
+        exit(1);
+    }
+}
+
+function pg_run_install_stage(array $cfg) {
+    global $argv;
+    pg_stage_begin('install');
+    try {
+        $tests_dir = $cfg['tests_dir'];
+        $config_path = $cfg['config_path'];
+        $argv = array('install.php', $config_path, 'no_ms_tests', 'no_core_tests');
+        $_SERVER['argv'] = $argv;
+        require_once $tests_dir . '/includes/install.php';
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+        pg_stage_ok('install');
+    } catch (Throwable $e) {
+        pg_stage_fail('install', $e);
+        exit(1);
+    }
+}
+
+function pg_run_load_deps_stage(array $cfg): array {
+    pg_stage_begin('load_deps');
+    try {
+        $loaded = array();
+        foreach (explode("\n", (string) ($cfg['dep_mounts'] ?? '')) as $dep_mount) {
+            $dep_mount = trim($dep_mount);
+            if ($dep_mount === '') {
+                continue;
+            }
+            foreach (glob($dep_mount . '/*.php') ?: array() as $dep_file) {
+                if (basename($dep_file) === 'db.php') {
+                    continue;
+                }
+                if (strpos(file_get_contents($dep_file), 'Plugin Name:') !== false) {
+                    require_once $dep_file;
+                    $loaded[] = $dep_file;
+                    break;
+                }
+            }
+        }
+        pg_stage_ok('load_deps');
+        return $loaded;
+    } catch (Throwable $e) {
+        pg_stage_fail('load_deps', $e);
+        exit(1);
+    }
+}
+
+function pg_run_load_component_stage(array $cfg): ?string {
+    pg_stage_begin('load_component');
+    try {
+        $plugin_path = $cfg['plugin_path'];
+        $loaded_file = null;
+        $style_css = $plugin_path . '/style.css';
+        if (file_exists($style_css) && strpos(file_get_contents($style_css), 'Theme Name:') !== false) {
+            pg_log('THEME_DETECTED');
+            if (file_exists($plugin_path . '/functions.php')) {
+                require_once $plugin_path . '/functions.php';
+            }
+        } else {
+            foreach (glob($plugin_path . '/*.php') ?: array() as $main_file) {
+                if (basename($main_file) === 'db.php') {
+                    continue;
+                }
+                if (strpos(file_get_contents($main_file), 'Plugin Name:') !== false) {
+                    pg_log('PLUGIN_DETECTED ' . basename($main_file));
+                    pg_log('PLUGIN_LOAD_CONTEXT ' . basename($main_file) . ' activate=false ' . pg_diagnostic_context());
+                    require_once $main_file;
+                    $loaded_file = $main_file;
+                    break;
+                }
+            }
+            if ($loaded_file === null) {
+                pg_log("NOTICE:no plugin entry file with 'Plugin Name:' header found in " . $plugin_path);
+            }
+        }
+        pg_stage_ok('load_component');
+        return $loaded_file;
+    } catch (Throwable $e) {
+        pg_stage_fail('load_component', $e);
+        exit(1);
+    }
+}
+
+function pg_run_activation_stage(array $cfg): void {
+    pg_stage_begin('activation');
+    try {
+        foreach (($cfg['plugin_files'] ?? array()) as $plugin_file) {
+            if (is_string($plugin_file) && $plugin_file !== '') {
+                pg_activate_plugin_file($plugin_file);
+            }
+        }
+        pg_stage_ok('activation');
+    } catch (Throwable $e) {
+        pg_stage_fail('activation', $e);
+        exit(1);
+    }
+}
+
+function pg_activate_plugin_file(string $plugin_file): void {
+    if (!function_exists('plugin_basename') || !function_exists('do_action')) {
+        pg_log('NOTICE:cannot activate plugin entry before WordPress plugin API is available: ' . $plugin_file);
+        return;
+    }
+    $plugin_basename = plugin_basename($plugin_file);
+    pg_log('PLUGIN_ACTIVATE ' . $plugin_basename);
+    pg_log('PLUGIN_ACTIVATE_BEGIN ' . $plugin_basename . ' ' . pg_diagnostic_context());
+    do_action('activate_' . $plugin_basename, false);
+    pg_mark_plugin_active($plugin_basename);
+    do_action('activated_plugin', $plugin_basename, false);
+    pg_log('PLUGIN_ACTIVATE_OK ' . $plugin_basename . ' ' . pg_diagnostic_context());
+}
+
+function pg_mark_plugin_active(string $plugin_basename): void {
+    if (!function_exists('get_option') || !function_exists('update_option')) {
+        return;
+    }
+    $active_plugins = (array) get_option('active_plugins', array());
+    if (!in_array($plugin_basename, $active_plugins, true)) {
+        $active_plugins[] = $plugin_basename;
+        sort($active_plugins);
+        update_option('active_plugins', array_values($active_plugins));
+    }
+}
+
+function pg_filter_changed_test_files(array $test_files, string $changed_files_json, string $plugin_path): array {
+    $decoded = json_decode($changed_files_json, true);
+    if (!is_array($decoded) || empty($decoded)) {
+        return $test_files;
+    }
+    $wanted = array();
+    foreach ($decoded as $entry) {
+        if (!is_scalar($entry)) {
+            continue;
+        }
+        $normalized = pg_component_relative_path((string) $entry, $plugin_path);
+        if ($normalized !== '') {
+            $wanted[$normalized] = true;
+        }
+    }
+    if (empty($wanted)) {
+        pg_log('NOTICE:changed tests did not contain usable test paths');
+        return array();
+    }
+    $filtered = array();
+    foreach ($test_files as $file) {
+        if (isset($wanted[pg_component_relative_path((string) $file, $plugin_path)])) {
+            $filtered[] = $file;
+        }
+    }
+    pg_log('SCOPED_TEST_FILES requested=' . count($wanted) . ' matched=' . count($filtered));
+    return $filtered;
+}
+
+function pg_component_relative_path(string $path, string $plugin_path): string {
+    $path = trim(str_replace('\\\\', '/', $path));
+    $plugin_path = rtrim(str_replace('\\\\', '/', $plugin_path), '/');
+    if (strpos($path, $plugin_path . '/') === 0) {
+        $path = substr($path, strlen($plugin_path) + 1);
+    } elseif (strpos($path, '/tests/') !== false) {
+        $path = substr($path, strpos($path, '/tests/') + 1);
+    }
+    while (strpos($path, './') === 0) {
+        $path = substr($path, 2);
+    }
+    return ltrim($path, '/');
+}
+
 pg_install_diagnostics_handlers();
 
 if (is_array($bench_env)) {
@@ -159,6 +558,12 @@ function wp_codebox_phpunit_parse_config($xml_path, $test_dir_default) {
     $suffixes = array('Test.php');
     $prefixes = array('test-');
     $excludes = array();
+    if (!is_readable($xml_path) && basename($xml_path) === 'phpunit.xml.dist') {
+        $alternate = dirname($xml_path) . '/phpunit.xml';
+        if (is_readable($alternate)) {
+            $xml_path = $alternate;
+        }
+    }
     if (!is_readable($xml_path)) {
         pg_log('NOTICE:phpunit.xml.dist not readable at ' . $xml_path . '; using defaults');
         return array($directories, $suffixes, $prefixes, $excludes);

@@ -676,17 +676,19 @@ class PlaygroundRuntime implements Runtime {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const explicitCode = argValue(args, "code") || argValue(args, "code-file")
+    const pluginSlug = argValue(args, "plugin-slug")?.trim() || ""
     const code = explicitCode ? await this.phpCodeFromArgs(args, "wordpress.phpunit") : normalizePhpCode(phpunitRunCode({
-      pluginSlug: argValue(args, "plugin-slug")?.trim() || "",
-      bootstrapFile: argValue(args, "bootstrap-file")?.trim() || "/homeboy-extension/scripts/lib/playground-bootstrap.php",
-      phpunitXml: argValue(args, "phpunit-xml")?.trim() || "/homeboy-extension/phpunit.xml.dist",
+      pluginSlug,
+      autoloadFile: argValue(args, "autoload-file")?.trim() || "/wp-codebox-vendor/autoload.php",
+      testsDir: argValue(args, "tests-dir")?.trim() || "/wp-codebox-vendor/wp-phpunit/wp-phpunit",
+      phpunitXml: argValue(args, "phpunit-xml")?.trim() || `/wordpress/wp-content/plugins/${pluginSlug}/phpunit.xml.dist`,
       selectedTestFile: argValue(args, "test-file")?.trim() || "",
       changedTestFiles: jsonArrayArg(args, "changed-tests-json"),
       env: jsonObjectArg(args, "env-json"),
       wpConfigDefines: jsonObjectArg(args, "wp-config-defines-json"),
       dependencyMounts: commaListArg(args, "dependency-mounts"),
     }))
-    if (!explicitCode && !argValue(args, "plugin-slug")?.trim()) {
+    if (!explicitCode && !pluginSlug) {
       throw new Error("wordpress.phpunit requires plugin-slug=<slug> when code/code-file is not provided")
     }
     const response = await server.playground.run({ code })
