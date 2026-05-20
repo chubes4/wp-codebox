@@ -128,6 +128,7 @@ export function printHelp(): void {
   wp-codebox recipe validate --recipe <path> [--json]
   wp-codebox recipe-run --recipe <path> [options]
   wp-codebox run --mount <host>:<vfs> --command <id> [options]
+  wp-codebox bench-run --component <path> [options]
   wp-codebox agent-runtime-probe --agents-api <path> --data-machine <path> --data-machine-code <path> [options]
   wp-codebox agent-sandbox-run --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [options]
   wp-codebox agent-sandbox-batch --agents-api <path> --data-machine <path> --data-machine-code <path> --task <text> [--task <text> ...] [options]
@@ -141,6 +142,13 @@ Options:
   --artifacts <dir>    Artifact root directory.
   --policy <json|file> Runtime policy JSON or path to a JSON file.
   --json               Emit machine-readable JSON.
+
+Bench run options:
+  --component <path>       Local plugin component path containing tests/bench/*.php workloads.
+  --component-id <id>      Component id for the BenchResults envelope. Defaults to component basename.
+  --plugin-slug <slug>     Plugin directory slug inside WordPress. Defaults to component basename.
+  --iterations <n>         Measured iterations per workload. Defaults to 3.
+  --warmup <n>             Warmup iterations per workload. Defaults to 1.
 
 Agent runtime probe options:
   --agents-api <path>         Local Agents API plugin checkout.

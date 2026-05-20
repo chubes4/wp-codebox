@@ -198,6 +198,20 @@ Supported workspace seeds:
 - `theme_scaffold`: creates `style.css`, `index.php`, and `README.md`, mounted by default at `/wordpress/wp-content/themes/<slug>`.
 - `directory`: copies `seed.source` into a disposable workspace and requires an explicit sandbox `target`.
 
+### `bench-run`
+
+Run plugin `tests/bench/*.php` workloads in a disposable WP Codebox runtime and emit the Homeboy-compatible `BenchResults` envelope.
+
+```bash
+npm run wp-codebox -- bench-run \
+  --component ./examples/bench-plugin \
+  --component-id bench-plugin \
+  --iterations 3 \
+  --json
+```
+
+Each workload file returns a callable. The callable may return numeric metrics directly or a payload with `metrics` and `metadata` keys. The command reports duration percentiles, custom metric aggregates, peak memory, runtime artifacts, and the parsed `benchResults` object in JSON output.
+
 ### `agent-runtime-probe`
 
 Boot a sandbox with Agents API, Data Machine, and Data Machine Code mounted, then verify the stack loads.

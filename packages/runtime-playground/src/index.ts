@@ -24,7 +24,7 @@ import {
   type MountDiffsResult,
 } from "./artifacts.js"
 import { playgroundBlueprint } from "./blueprint.js"
-import { abilityInputFromArgs, abilityPhpCode, argValue, cleanWpCliOutput, isSafeEnvName, normalizePhpCode, phpBody, shellArgv, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
+import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, cleanWpCliOutput, isSafeEnvName, normalizePhpCode, phpBody, positiveIntegerArg, shellArgv, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
 import type {
   ArtifactBundle,
   ArtifactManifest,
@@ -594,6 +594,10 @@ class PlaygroundRuntime implements Runtime {
       return this.runAbility(spec)
     }
 
+    if (spec.command === "wordpress.bench") {
+      return this.runBench(spec)
+    }
+
     throw new Error(`No Playground command handler is registered for: ${spec.command}`)
   }
 
@@ -640,6 +644,24 @@ class PlaygroundRuntime implements Runtime {
 
     const input = abilityInputFromArgs(spec.args ?? [])
     const response = await server.playground.run({ code: this.bootstrapAbilityPhpCode(abilityPhpCode(name, input)) })
+    return response.text
+  }
+
+  private async runBench(spec: ExecutionSpec): Promise<string> {
+    const server = await this.bootPlayground()
+    const args = spec.args ?? []
+    const pluginSlug = argValue(args, "plugin-slug")?.trim()
+    if (!pluginSlug) {
+      throw new Error("wordpress.bench requires plugin-slug=<slug>")
+    }
+
+    const componentId = argValue(args, "component-id")?.trim() || pluginSlug
+    const iterations = positiveIntegerArg(args, "iterations", 3)
+    const warmupIterations = positiveIntegerArg(args, "warmup", 1)
+    const response = await server.playground.run({
+      code: this.bootstrapPhpCode(benchRunCode({ componentId, pluginSlug, iterations, warmupIterations }), []),
+    })
+
     return response.text
   }
 
