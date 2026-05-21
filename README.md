@@ -40,6 +40,7 @@ What WP Codebox provides for product use cases:
 - Run a PHP or WP-CLI probe against mounted WordPress code.
 - Execute a WordPress Ability inside a disposable Playground runtime.
 - Run repeatable workspace recipes that mount plugins, seed workspaces, and capture outputs.
+- Drive stateful runtime episodes with reset, step, observe, snapshot, artifact, and close operations.
 - Launch sandboxed Data Machine / Agents API coding-agent tasks from the CLI or WordPress ability surface.
 - Fan out several task descriptions into separate isolated sandboxes.
 - Produce artifact bundles — patches, diffs, test results, live Playground preview URLs — that a parent product can review, replay, apply, or discard.
@@ -168,6 +169,44 @@ npm run wp-codebox -- run \
 ```
 
 The v1 preview is a held live Playground runtime. When `--preview-hold` is omitted, the preview field still records the URL observed during capture, but the runtime is destroyed on command completion and the URL is marked `expired-on-completion`. Artifact replay from `blueprint.after.json` remains partial and is a separate future preview mode.
+
+## Runtime Episodes
+
+Use `createRuntimeEpisode()` when a caller needs a stateful sandbox loop instead
+of a one-shot command or recipe. The episode wrapper is generic: it records reset
+observations, step executions, optional per-step observations, snapshots, and
+artifact bundles without knowing benchmark, reward, or scenario semantics.
+
+```ts
+import { createRuntimeEpisode } from "@chubes4/wp-codebox-core"
+import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
+
+const episode = await createRuntimeEpisode(
+  {
+    runtime: {
+      backend: "wordpress-playground",
+      environment: { kind: "wordpress", version: "7.0", blueprint: { steps: [] } },
+      policy: {
+        network: "deny",
+        filesystem: "readwrite-mounts",
+        commands: ["wordpress.wp-cli", "wordpress.run-php"],
+        secrets: "none",
+        approvals: "never",
+      },
+    },
+    stepObservation: { type: "runtime-info" },
+  },
+  createPlaygroundRuntimeBackend(),
+)
+
+await episode.step({ command: "wordpress.wp-cli", args: ["command=post list"] })
+const artifacts = await episode.collectArtifacts({ includeLogs: true })
+const trace = await episode.trace()
+await episode.close()
+```
+
+Products such as eval harnesses can project this generic episode trace into their
+own action, observation, reward, and report schemas outside WP Codebox.
 
 ## CLI Commands
 

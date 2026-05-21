@@ -432,6 +432,45 @@ export interface Runtime {
   destroy(): Promise<void>
 }
 
+export interface RuntimeEpisodeSpec {
+  runtime: RuntimeCreateSpec
+  mounts?: MountSpec[]
+  resetObservations?: ObservationSpec[]
+  stepObservation?: ObservationSpec | false
+  artifactSpec?: ArtifactSpec
+}
+
+export interface RuntimeEpisodeResetResult {
+  runtime: RuntimeInfo
+  observations: ObservationResult[]
+}
+
+export interface RuntimeEpisodeStepResult {
+  index: number
+  action: ExecutionSpec
+  execution: ExecutionResult
+  observation?: ObservationResult
+}
+
+export interface RuntimeEpisodeTrace {
+  schema: "wp-codebox/runtime-episode-trace/v1"
+  runtime: RuntimeInfo
+  reset: RuntimeEpisodeResetResult
+  steps: RuntimeEpisodeStepResult[]
+  snapshots: Snapshot[]
+  artifacts?: ArtifactBundle
+}
+
+export interface RuntimeEpisode {
+  reset(): Promise<RuntimeEpisodeResetResult>
+  step(action: ExecutionSpec, observation?: ObservationSpec | false): Promise<RuntimeEpisodeStepResult>
+  observe(spec: ObservationSpec): Promise<ObservationResult>
+  snapshot(): Promise<Snapshot>
+  collectArtifacts(spec?: ArtifactSpec): Promise<ArtifactBundle>
+  trace(): Promise<RuntimeEpisodeTrace>
+  close(): Promise<void>
+}
+
 export interface RuntimeBackend {
   readonly kind: RuntimeBackendKind
   create(spec: RuntimeCreateSpec): Promise<Runtime>
@@ -570,4 +609,110 @@ export async function createRuntime(spec: RuntimeCreateSpec, backend: RuntimeBac
   }
 
   return backend.create(spec)
+}
+
+export async function createRuntimeEpisode(spec: RuntimeEpisodeSpec, backend: RuntimeBackend): Promise<RuntimeEpisode> {
+  return RuntimeEpisodeRunner.create(spec, backend)
+}
+
+class RuntimeEpisodeRunner implements RuntimeEpisode {
+  private runtime?: Runtime
+  private resetResult?: RuntimeEpisodeResetResult
+  private readonly steps: RuntimeEpisodeStepResult[] = []
+  private readonly snapshots: Snapshot[] = []
+  private artifacts?: ArtifactBundle
+
+  private constructor(
+    private readonly spec: RuntimeEpisodeSpec,
+    private readonly backend: RuntimeBackend,
+  ) {}
+
+  static async create(spec: RuntimeEpisodeSpec, backend: RuntimeBackend): Promise<RuntimeEpisodeRunner> {
+    const episode = new RuntimeEpisodeRunner(spec, backend)
+    await episode.reset()
+    return episode
+  }
+
+  async reset(): Promise<RuntimeEpisodeResetResult> {
+    await this.runtime?.destroy()
+    this.runtime = await createRuntime(this.spec.runtime, this.backend)
+    this.steps.length = 0
+    this.snapshots.length = 0
+    this.artifacts = undefined
+
+    for (const mount of this.spec.mounts ?? []) {
+      await this.runtime.mount(mount)
+    }
+
+    const observations = []
+    for (const observation of this.spec.resetObservations ?? [{ type: "runtime-info" }, { type: "mounts" }]) {
+      observations.push(await this.runtime.observe(observation))
+    }
+
+    this.resetResult = {
+      runtime: await this.runtime.info(),
+      observations,
+    }
+
+    return this.resetResult
+  }
+
+  async step(action: ExecutionSpec, observation: ObservationSpec | false = this.spec.stepObservation ?? false): Promise<RuntimeEpisodeStepResult> {
+    const runtime = this.assertRuntime()
+    const execution = await runtime.execute(action)
+    const result: RuntimeEpisodeStepResult = {
+      index: this.steps.length,
+      action,
+      execution,
+      ...(observation ? { observation: await runtime.observe(observation) } : {}),
+    }
+
+    this.steps.push(result)
+    return result
+  }
+
+  async observe(spec: ObservationSpec): Promise<ObservationResult> {
+    return this.assertRuntime().observe(spec)
+  }
+
+  async snapshot(): Promise<Snapshot> {
+    const snapshot = await this.assertRuntime().snapshot()
+    this.snapshots.push(snapshot)
+    return snapshot
+  }
+
+  async collectArtifacts(spec: ArtifactSpec = this.spec.artifactSpec ?? {}): Promise<ArtifactBundle> {
+    this.artifacts = await this.assertRuntime().collectArtifacts(spec)
+    return this.artifacts
+  }
+
+  async trace(): Promise<RuntimeEpisodeTrace> {
+    const runtime = this.assertRuntime()
+    const reset = this.resetResult ?? {
+      runtime: await runtime.info(),
+      observations: [],
+    }
+
+    return {
+      schema: "wp-codebox/runtime-episode-trace/v1",
+      runtime: await runtime.info(),
+      reset,
+      steps: [...this.steps],
+      snapshots: [...this.snapshots],
+      ...(this.artifacts ? { artifacts: this.artifacts } : {}),
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.runtime?.destroy()
+    this.runtime = undefined
+  }
+
+  private assertRuntime(): Runtime {
+    if (!this.runtime) {
+      throw new Error("Runtime episode is closed")
+    }
+
+    return this.runtime
+  }
 }

@@ -9,10 +9,11 @@
     "package-distribution-smoke": "tsx scripts/package-distribution-smoke.ts",
     "policy-validation-smoke": "tsx scripts/policy-validation-smoke.ts",
     "artifact-contract-smoke": "tsx scripts/artifact-contract-smoke.ts",
+    "runtime-episode-smoke": "tsx scripts/runtime-episode-smoke.ts",
     "recipe-bench-smoke": "tsx scripts/recipe-bench-smoke.ts",
     "wp-codebox": "node packages/cli/dist/index.js",
     "wordpress-plugin-smoke": "php tests/smoke-wordpress-plugin.php",
-    "check": "npm run build && npm run policy-validation-smoke && npm run wordpress-plugin-smoke && npm run package-distribution-smoke && npm run artifact-contract-smoke && npm run recipe-bench-smoke && npm run wp-codebox -- run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json"
+    "check": "npm run build && npm run policy-validation-smoke && npm run wordpress-plugin-smoke && npm run package-distribution-smoke && npm run artifact-contract-smoke && npm run runtime-episode-smoke && npm run recipe-bench-smoke && npm run wp-codebox -- run --mount ./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin --command wordpress.run-php --arg code-file=./examples/simple-plugin/probe.php --artifacts ./artifacts --json"
   },
   "workspaces": [
     "packages/*"
