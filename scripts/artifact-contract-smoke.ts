@@ -122,6 +122,36 @@ try {
   const agentMount = join(artifactsDirectory, "agent-mounted-component")
   await mkdir(agentMount, { recursive: true })
   await writeFile(join(agentMount, "component.php"), "<?php // fixture\n")
+
+  await assert.rejects(
+    () => execFileAsync(
+      process.execPath,
+      [
+        "packages/cli/dist/index.js",
+        "run",
+        "--mount",
+        `${agentMount}:/wordpress/wp-content/plugins/provenance-smoke`,
+        "--command",
+        "wordpress.phpunit",
+        "--arg",
+        "code=throw new Error('wp-codebox-canary-cli-fatal');",
+        "--artifacts",
+        artifactsDirectory,
+        "--json",
+      ],
+      {
+        cwd: resolve(import.meta.dirname, ".."),
+        maxBuffer: 1024 * 1024 * 10,
+      },
+    ),
+    (error) => {
+      const childError = error as { stdout?: string; stderr?: string }
+      assert.match(childError.stdout ?? "", /wp-codebox-canary-cli-fatal/)
+      assert.match(childError.stderr ?? "", /wp-codebox-canary-cli-fatal/)
+      return true
+    },
+  )
+
   const runtime = await createRuntime(
     {
       backend: "wordpress-playground",
@@ -129,7 +159,7 @@ try {
       policy: {
         network: "deny",
         filesystem: "readwrite-mounts",
-        commands: ["wordpress.run-php"],
+        commands: ["wordpress.run-php", "wordpress.phpunit"],
         secrets: "none",
         approvals: "never",
       },
@@ -161,6 +191,20 @@ try {
   assert.ok(agentReview.provenance.mounts.some((mount: { target: string; metadata?: { slug?: string } }) =>
     mount.target === "/wordpress/wp-content/plugins/provenance-smoke" && mount.metadata?.slug === "provenance-smoke",
   ))
+
+  await assert.rejects(
+    () => runtime.execute({
+      command: "wordpress.phpunit",
+      args: ["code=throw new Error('wp-codebox-canary-bootstrap-fatal');"],
+    }),
+    (error) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /wordpress\.phpunit (failed with exit code|crashed before producing a structured response)/)
+      assert.match(error.message, /wp-codebox-canary-bootstrap-fatal/)
+      assert.match(error.message, /Playground output|Playground errors|=== Stdout ===|=== Stderr ===/)
+      return true
+    },
+  )
   await runtime.destroy()
 
   const secretName = "WP_CODEBOX_SMOKE_SECRET"

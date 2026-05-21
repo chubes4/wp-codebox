@@ -58,6 +58,50 @@ interface PlaygroundRunResponse {
   text: string
 }
 
+class PlaygroundCommandError extends Error {
+  readonly code = "wp-codebox-playground-command-failed"
+
+  constructor(readonly command: string, readonly response: PlaygroundRunResponse) {
+    super(playgroundFailureMessage(command, response))
+    this.name = "PlaygroundCommandError"
+  }
+}
+
+class PlaygroundCommandCrashError extends Error {
+  readonly code = "wp-codebox-playground-command-crashed"
+
+  constructor(readonly command: string, readonly cause: unknown) {
+    super(`${command} crashed before producing a structured response\n\n${errorMessage(cause)}`)
+    this.name = "PlaygroundCommandCrashError"
+  }
+}
+
+function assertPlaygroundResponseOk(command: string, response: PlaygroundRunResponse): void {
+  if (typeof response.exitCode === "number" && response.exitCode !== 0) {
+    throw new PlaygroundCommandError(command, response)
+  }
+}
+
+function playgroundFailureMessage(command: string, response: PlaygroundRunResponse): string {
+  const lines = [`${command} failed with exit code ${response.exitCode ?? "unknown"}`]
+  const errors = response.errors?.trim()
+  const text = response.text?.trim()
+
+  if (errors) {
+    lines.push("", "--- Playground errors ---", errors)
+  }
+
+  if (text) {
+    lines.push("", "--- Playground output ---", text)
+  }
+
+  return lines.join("\n")
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 interface PlaygroundCliServer {
   playground: {
     run(options: { code: string } | { scriptPath: string }): Promise<PlaygroundRunResponse>
@@ -644,7 +688,8 @@ class PlaygroundRuntime implements Runtime {
   private async runPhp(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const code = await this.phpCodeFromArgs(spec.args ?? [])
-    const response = await server.playground.run({ code: this.bootstrapPhpCode(code, spec.args ?? []) })
+    const response = await this.runPlaygroundCommand("wordpress.run-php", server, { code: this.bootstrapPhpCode(code, spec.args ?? []) })
+    assertPlaygroundResponseOk("wordpress.run-php", response)
 
     return response.text
   }
@@ -667,10 +712,8 @@ class PlaygroundRuntime implements Runtime {
 
     const scriptPath = `/tmp/wp-codebox-wp-cli-${this.commands.length}.php`
     await server.playground.writeFile(scriptPath, wpCliPhpScript(argv))
-    const response = await server.playground.run({ scriptPath })
-    if (typeof response.exitCode === "number" && response.exitCode !== 0) {
-      throw new Error(response.errors || `wordpress.wp-cli failed with exit code ${response.exitCode}`)
-    }
+    const response = await this.runPlaygroundCommand("wordpress.wp-cli", server, { scriptPath })
+    assertPlaygroundResponseOk("wordpress.wp-cli", response)
 
     return cleanWpCliOutput(response.text)
   }
@@ -683,7 +726,8 @@ class PlaygroundRuntime implements Runtime {
     }
 
     const input = abilityInputFromArgs(spec.args ?? [])
-    const response = await server.playground.run({ code: this.bootstrapAbilityPhpCode(abilityPhpCode(name, input)) })
+    const response = await this.runPlaygroundCommand("wordpress.ability", server, { code: this.bootstrapAbilityPhpCode(abilityPhpCode(name, input)) })
+    assertPlaygroundResponseOk("wordpress.ability", response)
     return response.text
   }
 
@@ -701,9 +745,10 @@ class PlaygroundRuntime implements Runtime {
     const dependencySlugs = commaListArg(args, "dependency-slugs")
     const env = jsonObjectArg(args, "env-json")
     const workloads = jsonArrayArg(args, "workloads-json")
-    const response = await server.playground.run({
+    const response = await this.runPlaygroundCommand("wordpress.bench", server, {
       code: this.bootstrapPhpCode(benchRunCode({ componentId, pluginSlug, iterations, warmupIterations, dependencySlugs, env, workloads }), []),
     })
+    assertPlaygroundResponseOk("wordpress.bench", response)
 
     return response.text
   }
@@ -725,9 +770,18 @@ class PlaygroundRuntime implements Runtime {
     if (!explicitCode && !argValue(args, "plugin-slug")?.trim()) {
       throw new Error("wordpress.phpunit requires plugin-slug=<slug> when code/code-file is not provided")
     }
-    const response = await server.playground.run({ code })
+    const response = await this.runPlaygroundCommand("wordpress.phpunit", server, { code })
+    assertPlaygroundResponseOk("wordpress.phpunit", response)
 
     return response.text
+  }
+
+  private async runPlaygroundCommand(command: string, server: PlaygroundCliServer, options: { code: string } | { scriptPath: string }): Promise<PlaygroundRunResponse> {
+    try {
+      return await server.playground.run(options)
+    } catch (error) {
+      throw new PlaygroundCommandCrashError(command, error)
+    }
   }
 
   private bootstrapAbilityPhpCode(code: string): string {

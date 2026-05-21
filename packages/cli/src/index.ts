@@ -182,6 +182,7 @@ async function main(args: string[]): Promise<number> {
     const { result, logs } = await captureStdout(execute)
     const output = logs.length > 0 ? { ...result, logs } : result
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    printJsonFailureDiagnostic(output)
     return output.success ? 0 : 1
   }
 
@@ -222,7 +223,26 @@ async function main(args: string[]): Promise<number> {
   const { result, logs } = await captureStdout(execute)
   const output = logs.length > 0 ? { ...result, logs } : result
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+  printJsonFailureDiagnostic(output)
   return output.success ? 0 : 1
+}
+
+function printJsonFailureDiagnostic(output: { success: boolean; error?: { message?: string }; logs?: string[] }): void {
+  if (output.success) {
+    return
+  }
+
+  const message = output.error?.message?.trim()
+  if (message) {
+    console.error(message)
+  }
+
+  for (const log of output.logs ?? []) {
+    const trimmed = log.trim()
+    if (trimmed) {
+      console.error(trimmed)
+    }
+  }
 }
 
 async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
