@@ -32,6 +32,7 @@
     "prepare": "npm run build",
     "package:wordpress-plugin": "tsx scripts/build-wordpress-plugin-zip.ts",
     "package-distribution-smoke": "tsx scripts/package-distribution-smoke.ts",
+    "release:package": "tsx scripts/package-release-artifact.ts",
     "policy-validation-smoke": "tsx scripts/policy-validation-smoke.ts",
     "artifact-contract-smoke": "tsx scripts/artifact-contract-smoke.ts",
     "runtime-episode-smoke": "tsx scripts/runtime-episode-smoke.ts",
