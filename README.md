@@ -1,27 +1,50 @@
 # WP Codebox
 
-WP Codebox runs disposable WordPress Playground sandboxes, executes bounded work inside them, and saves replayable artifacts before the sandbox is destroyed. It runs WordPress inside the sandbox, but the host that calls it can be anything: a CLI script, CI job, Node app, WordPress plugin, Data Machine flow, Homeboy workflow, or another control plane.
+**WP Codebox unlocks secure WordPress code execution from anywhere.** Run agents, accept untrusted patches, evaluate plugins, reproduce bugs, or experiment freely — every sandbox is a disposable WordPress Playground that can't touch its caller. Your host can be a CLI, CI job, mobile app, Node service, WordPress plugin, or anything else that can shell out or hit an API.
 
-It is the runtime boundary for agent-built or workflow-built outputs. It is not the agent framework, the review UI, the deploy system, or the production site mutator. The WordPress plugin in this repo is an optional host adapter that exposes WP Codebox through WordPress abilities; the core CLI/runtime works without installing that plugin on a parent site.
+WordPress has historically lacked a clean scratch space for code execution. Modern dev workflows assume one — Node has `npm install` per project, Python has venvs, containers have ephemeral filesystems. WordPress Playground finally provides that primitive: real WordPress, PHP-in-WASM, fully ephemeral, no host filesystem access except via declared mounts. WP Codebox wraps Playground into a usable runtime contract so any product — WordPress or not — can offer code execution against a real WordPress instance without risking the caller.
+
+WP Codebox is the runtime boundary for agent-built or workflow-built outputs. It is not the agent framework, the review UI, the deploy system, or the production site mutator. The WordPress plugin in this repo is one optional host adapter (useful when the host *is* a WordPress site); the core CLI/runtime works anywhere `node` can run.
 
 ```text
-Any host: CLI, CI, Node app, WordPress plugin, Data Machine, Homeboy, Studio
+Any host: CLI, CI, mobile, Node service, WP plugin, GitHub Action, ...
   -> WP Codebox
-    -> disposable WordPress Playground runtime
+    -> disposable WordPress Playground sandbox
       -> mounted inputs, plugins, tools, and optional agent stack
       -> controlled commands or agent task
       -> artifact bundle
   -> review, replay, apply, export, or discard outside the sandbox
 ```
 
-## Current Use Cases
+## Product Use Cases
+
+What you can build on top of WP Codebox:
+
+- **Agentic coding against a WordPress site.** Let users describe a change in chat — from any host: a WordPress plugin, a mobile app, a desktop tool, a Slack/Discord bot. Dispatch a sandbox with the target site's stack mounted, capture an artifact with a live Playground preview URL, open a PR via mounted GitHub tooling. The contributor never needs shell access.
+- **Agent training and evaluation.** Run the same WordPress task side by side across multiple models in isolated Playground workspaces. Capture each model's output, grade against hidden quality checks, and produce per-model PRs as review surface. See [wp-gym](https://github.com/Automattic/wp-gym).
+- **Long-running terrariums.** Boot a Playground that an agent evolves over time — software, content, configuration — with day-cycle automation driven from CI. See [world-of-wordpress](https://github.com/chubes4/world-of-wordpress).
+- **Static-site / WordPress-import factories.** Generate raw HTML/CSS sites in CI, validate them via Playground + WordPress import, post Playground preview links as PR evidence. See [wp-site-generator](https://github.com/chubes4/wp-site-generator).
+- **Untrusted patch evaluation.** Plugin and theme authors can accept community-submitted patches, run them in a sandbox, capture artifacts (diffs, test results, screenshots), and review before merging. The reviewing tool can be anything.
+- **"Try it in a sandbox first."** Before installing a plugin, theme, or update on a production site, run it in a disposable Playground and see what happens.
+- **Reproduction harness for bug reports.** Ship a recipe with an issue so any contributor can replay the bug deterministically in a clean WordPress instance. The replay can be triggered from a CLI, a CI job, or a maintainer's IDE plugin.
+- **Hosting provider integrations.** "Test this change in a sandbox" buttons in admin dashboards or hosting panels.
+- **CI/CD safety net.** Dispatch a sandbox from a GitHub Action or other CI runner to evaluate a PR's runtime behavior against real WordPress before merging.
+- **Mobile / native dev tools.** A mobile coding assistant or desktop dev tool can drive sandboxes for real WordPress execution without bundling PHP locally.
+- **Education.** Real WordPress instances per student per exercise, fully disposable.
+- **Security research.** Detonate suspicious plugins, themes, or patches in isolation.
+
+Prior art for the "isolated Playground + controlled execution + evidence bundle" pattern: [wp-gym](https://github.com/Automattic/wp-gym), [world-of-wordpress](https://github.com/chubes4/world-of-wordpress), and [wp-site-generator](https://github.com/chubes4/wp-site-generator) all demonstrate non-WordPress hosts (GitHub Actions / CI runners) driving WordPress Playground for evidence, training, or generation. WP Codebox extracts the shared runtime contract from those patterns into a reusable substrate.
+
+## Runtime Capabilities
+
+What WP Codebox provides for those product use cases:
 
 - Run a PHP or WP-CLI probe against mounted WordPress code.
 - Execute a WordPress Ability inside a disposable Playground runtime.
 - Run repeatable workspace recipes that mount plugins, seed workspaces, and capture outputs.
 - Launch sandboxed Data Machine / Agents API coding-agent tasks from the CLI or WordPress ability surface.
 - Fan out several task descriptions into separate isolated sandboxes.
-- Produce artifact bundles that a parent product can review or consume later.
+- Produce artifact bundles — patches, diffs, test results, live Playground preview URLs — that a parent product can review, replay, apply, or discard.
 
 ## Why A WordPress Plugin?
 

@@ -1,7 +1,7 @@
 {
   "name": "wp-codebox-wordpress-plugin",
   "private": true,
-  "description": "WordPress plugin package artifact for WP Codebox parent-site abilities.",
+  "description": "WP Codebox parent-site abilities — secure coding environments inside WordPress via disposable Playground sandboxes.",
   "scripts": {
     "zip": "tsx ../../scripts/build-wordpress-plugin-zip.ts"
   }

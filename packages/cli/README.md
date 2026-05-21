@@ -1,7 +1,7 @@
 # WP Codebox CLI
 
 CLI entrypoint for running disposable WP Codebox sandboxes and collecting
-reviewable artifact bundles.
+reviewable artifact bundles. **Secure coding environments inside WordPress** — every command runs against a fresh WordPress Playground instance that can't touch your host site.
 
 ## Install
 

@@ -1,6 +1,7 @@
 {
   "name": "@chubes4/wp-codebox-cli",
   "version": "0.0.0",
+  "description": "WP Codebox CLI — secure WordPress code execution from anywhere. Run disposable Playground sandboxes from any host: CLI, CI, mobile, Node service, or WP plugin.",
   "type": "module",
   "bin": {
     "wp-codebox": "dist/index.js"
