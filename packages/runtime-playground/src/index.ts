@@ -197,26 +197,49 @@ class PlaygroundRuntime implements Runtime {
       cwd: spec.cwd ?? null,
       timeoutMs: spec.timeoutMs ?? null,
     })
-    const result: ExecutionResult = {
-      id: commandId,
-      command: spec.command,
-      args: spec.args ?? [],
-      exitCode: 0,
-      stdout: await this.executePlaygroundCommand(spec),
-      stderr: "",
-      startedAt,
-      finishedAt: now(),
-    }
+    try {
+      const result: ExecutionResult = {
+        id: commandId,
+        command: spec.command,
+        args: spec.args ?? [],
+        exitCode: 0,
+        stdout: await this.executePlaygroundCommand(spec),
+        stderr: "",
+        startedAt,
+        finishedAt: now(),
+      }
 
-    this.commands.push(result)
-    this.recordEvent("runtime.command.finished", {
-      id: result.id,
-      command: result.command,
-      exitCode: result.exitCode,
-      startedAt: result.startedAt,
-      finishedAt: result.finishedAt,
-    })
-    return result
+      this.commands.push(result)
+      this.recordEvent("runtime.command.finished", {
+        id: result.id,
+        command: result.command,
+        exitCode: result.exitCode,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+      })
+      return result
+    } catch (error) {
+      const result: ExecutionResult = {
+        id: commandId,
+        command: spec.command,
+        args: spec.args ?? [],
+        exitCode: 1,
+        stdout: "",
+        stderr: errorMessage(error),
+        startedAt,
+        finishedAt: now(),
+      }
+
+      this.commands.push(result)
+      this.recordEvent("runtime.command.finished", {
+        id: result.id,
+        command: result.command,
+        exitCode: result.exitCode,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+      })
+      throw error
+    }
   }
 
   async observe(spec: ObservationSpec): Promise<ObservationResult> {

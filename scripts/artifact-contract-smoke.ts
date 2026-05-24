@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -184,6 +185,8 @@ try {
       const childError = error as { stdout?: string; stderr?: string }
       assert.match(childError.stdout ?? "", /wp-codebox-canary-cli-fatal/)
       assert.match(childError.stderr ?? "", /wp-codebox-canary-cli-fatal/)
+      const output = JSON.parse(childError.stdout ?? "{}")
+      assert.match(readFileSync(output.artifacts.commandsLogPath, "utf8"), /wp-codebox-canary-cli-fatal/)
       return true
     },
   )
