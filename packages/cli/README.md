@@ -24,3 +24,9 @@ npm run package-distribution-smoke
 The distribution smoke runs `npm pack --dry-run --json` and verifies the package
 contains `package.json`, `README.md`, and the compiled CLI entrypoint used by the
 published binary.
+
+## Recipe Planning
+
+- `wp-codebox recipe validate --recipe <path> [--json]` validates recipe shape, paths, commands, and arguments without resolving a full execution plan.
+- `wp-codebox recipe-run --recipe <path> --dry-run --json` validates the recipe and emits the resolved plan without booting Playground, creating temp workspaces, mutating files, or writing artifacts.
+- `wp-codebox recipe-run --recipe <path> [--json]` boots Playground, mounts inputs, executes workflow steps, and captures artifacts.

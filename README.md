@@ -247,6 +247,8 @@ npm run wp-codebox -- recipe validate \
 
 Validation checks schema, source paths, extra plugin entrypoints, workspace seeds, supported workflow commands, JSON ability inputs, and command arguments.
 
+Use `recipe validate` when you only need a pass/fail contract for authoring or CI. It does not resolve the execution plan beyond validation summaries.
+
 ### `recipe-run`
 
 Run a repeatable recipe.
@@ -259,6 +261,17 @@ npm run wp-codebox -- recipe-run \
 ```
 
 Recipes are JSON declarations for a sandbox setup plus workflow steps. They can mount existing directories, create disposable plugin/theme workspaces, activate extra plugins, allow-list selected secret environment variable names, and capture the output as artifacts.
+
+Pass `--dry-run --json` to validate the same recipe and emit the resolved plan without booting Playground, creating temp workspaces, mounting files, executing commands, or writing artifacts:
+
+```bash
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/simple-plugin.json \
+  --dry-run \
+  --json
+```
+
+Dry-run output uses `wp-codebox/recipe-run-dry-run/v1` and includes resolved mounts, planned workspaces, extra plugins, workflow steps with parsed and resolved command args, allowed secret environment variable names without values, and per-step policy status. Use `recipe-run` without `--dry-run` when you want the real Playground-backed execution and artifact bundle.
 
 Mount entries may include opaque `metadata` that is preserved in runtime observations, artifact provenance, and captured mount files. Product-specific callers can use this to map sandbox paths back to source repositories without WP Codebox knowing about the caller's deployment environment:
 

@@ -15,7 +15,17 @@ interface RunOutputLike {
 }
 
 interface RecipeRunOutputLike extends RunOutputLike {
-  executions: ExecutionResult[]
+  executions?: ExecutionResult[]
+  dryRun?: boolean
+  plan?: {
+    workflow?: { steps?: unknown[] }
+    mounts?: unknown[]
+    workspaces?: unknown[]
+    extra_plugins?: unknown[]
+  }
+  validation?: {
+    issues?: Array<{ code: string; path: string; message: string }>
+  }
 }
 
 interface RecipeValidateOutputLike {
@@ -89,12 +99,24 @@ export function printHumanOutput(output: RunOutputLike): void {
 export function printRecipeHumanOutput(output: RecipeRunOutputLike): void {
   if (!output.success) {
     console.error(output.error?.message ?? "WP Codebox recipe failed")
+    for (const issue of output.validation?.issues ?? []) {
+      console.error(`- ${issue.code} ${issue.path}: ${issue.message}`)
+    }
+    return
+  }
+
+  if (output.dryRun) {
+    console.log("WP Codebox recipe dry-run")
+    console.log(`Steps: ${output.plan?.workflow?.steps?.length ?? 0}`)
+    console.log(`Mounts: ${output.plan?.mounts?.length ?? 0}`)
+    console.log(`Workspaces: ${output.plan?.workspaces?.length ?? 0}`)
+    console.log(`Extra plugins: ${output.plan?.extra_plugins?.length ?? 0}`)
     return
   }
 
   console.log("WP Codebox recipe")
   console.log(`Runtime: ${output.runtime?.backend ?? "unknown"}`)
-  console.log(`Steps: ${output.executions.length}`)
+  console.log(`Steps: ${output.executions?.length ?? 0}`)
   console.log(`Artifacts: ${output.artifacts?.directory ?? "none"}`)
   if (output.artifacts?.preview?.url) {
     console.log(`Preview: ${output.artifacts.preview.url} (${output.artifacts.preview.status})`)
@@ -144,6 +166,7 @@ Options:
   --artifacts <dir>    Artifact root directory.
   --preview-hold <n>   Keep the live Playground preview available after a successful run. Accepts seconds or minutes, e.g. 30s or 15m; max 3600s.
   --policy <json|file> Runtime policy JSON or path to a JSON file.
+  --dry-run            Validate recipe-run and emit a resolved JSON plan without booting Playground or writing temp workspaces.
   --json               Emit machine-readable JSON.
 
 Example:

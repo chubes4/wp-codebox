@@ -2,7 +2,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
-import { createRuntime, type ArtifactBundle, type ExecutionResult, type Runtime, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { createRuntime, validateRuntimePolicy, type ArtifactBundle, type ExecutionResult, type Runtime, type RuntimeInfo, type RuntimePolicy, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
 import { captureStdout, printBatchHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
@@ -39,6 +39,7 @@ interface RecipeRunOptions {
   artifactsDirectory?: string
   previewHoldSeconds?: number
   json: boolean
+  dryRun: boolean
 }
 
 interface RecipeValidateOptions {
@@ -78,6 +79,89 @@ interface RecipeRunOutput {
   artifacts?: ArtifactBundle
   logs?: string[]
   error?: RunOutput["error"]
+}
+
+interface RecipeDryRunOutput {
+  success: boolean
+  schema: "wp-codebox/recipe-run-dry-run/v1"
+  recipePath?: string
+  dryRun: true
+  valid: boolean
+  validation: {
+    issues: RecipeValidationIssue[]
+  }
+  plan?: RecipeDryRunPlan
+  error?: RunOutput["error"]
+}
+
+type RecipeRunCommandOutput = RecipeRunOutput | RecipeDryRunOutput
+
+interface RecipeDryRunPlan {
+  runtime: {
+    backend: string
+    name: string
+    wp: string
+    blueprint: unknown
+  }
+  artifacts: {
+    directory?: string
+  }
+  mounts: RecipeDryRunMount[]
+  workspaces: RecipeDryRunWorkspace[]
+  extra_plugins: RecipeDryRunExtraPlugin[]
+  secretEnv: Array<{ name: string; available: boolean }>
+  policy: RuntimePolicy & {
+    valid: boolean
+    issues: ReturnType<typeof validateRuntimePolicy>["issues"]
+  }
+  workflow: {
+    steps: RecipeDryRunStep[]
+  }
+}
+
+interface RecipeDryRunMount {
+  type: "directory"
+  source?: string
+  target: string
+  mode: "readonly" | "readwrite"
+  metadata?: Record<string, unknown>
+  planned?: "existing" | "generated"
+}
+
+interface RecipeDryRunWorkspace {
+  index: number
+  source?: string
+  target: string
+  mode: "readonly" | "readwrite"
+  seed: WorkspaceRecipeWorkspace["seed"]
+  generated: boolean
+  metadata: Record<string, unknown>
+}
+
+interface RecipeDryRunExtraPlugin {
+  source: string
+  slug: string
+  target: string
+  pluginFile: string
+  activate: boolean
+}
+
+interface RecipeDryRunStep {
+  index: number
+  command: string
+  args: string[]
+  parsedArgs: Record<string, string | true>
+  resolvedCommand: string
+  resolvedArgs: string[]
+  resolvedParsedArgs: Record<string, string | true>
+  policy: {
+    status: "allowed" | "denied"
+    command: string
+    allowedCommands: string[]
+    approvals: RuntimePolicy["approvals"]
+    filesystem: RuntimePolicy["filesystem"]
+    secrets: RuntimePolicy["secrets"]
+  }
 }
 
 interface PreparedWorkspaceMount {
@@ -171,7 +255,7 @@ async function main(args: string[]): Promise<number> {
 
   if (command === "recipe-run") {
     const options = parseRecipeRunOptions(args)
-    const execute = () => runRecipe(options)
+    const execute = (): Promise<RecipeRunCommandOutput> => options.dryRun ? dryRunRecipe(options) : runRecipe(options)
 
     if (!options.json) {
       const output = await execute()
@@ -225,6 +309,122 @@ async function main(args: string[]): Promise<number> {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   printJsonFailureDiagnostic(output)
   return output.success ? 0 : 1
+}
+
+async function dryRunRecipe(options: RecipeRunOptions): Promise<RecipeDryRunOutput> {
+  const recipePath = resolve(options.recipePath)
+  try {
+    const recipeDirectory = dirname(recipePath)
+    const raw = await readFile(recipePath, "utf8")
+    const recipe = parseWorkspaceRecipe(raw, recipePath)
+    const issues = await validateWorkspaceRecipe(recipe, recipePath)
+
+    if (issues.length > 0) {
+      return {
+        success: false,
+        schema: "wp-codebox/recipe-run-dry-run/v1",
+        recipePath,
+        dryRun: true,
+        valid: false,
+        validation: { issues },
+        error: {
+          name: "RecipeValidationError",
+          message: `Recipe validation failed with ${issues.length} issue${issues.length === 1 ? "" : "s"}.`,
+        },
+      }
+    }
+
+    return {
+      success: true,
+      schema: "wp-codebox/recipe-run-dry-run/v1",
+      recipePath,
+      dryRun: true,
+      valid: true,
+      validation: { issues },
+      plan: await recipeDryRunPlan(recipe, recipeDirectory, options),
+    }
+  } catch (error) {
+    return {
+      success: false,
+      schema: "wp-codebox/recipe-run-dry-run/v1",
+      recipePath,
+      dryRun: true,
+      valid: false,
+      validation: {
+        issues: [
+          {
+            code: "invalid-recipe",
+            path: "$",
+            message: error instanceof SyntaxError ? `Recipe JSON is invalid: ${error.message}` : error instanceof Error ? error.message : String(error),
+          },
+        ],
+      },
+      error: serializeError(error),
+    }
+  }
+}
+
+async function recipeDryRunPlan(recipe: WorkspaceRecipe, recipeDirectory: string, options: RecipeRunOptions): Promise<RecipeDryRunPlan> {
+  const policy = recipePolicy(recipe)
+  const policyValidation = validateRuntimePolicy(policy)
+  const workspaces = recipeDryRunWorkspaces(recipe, recipeDirectory)
+  const extraPlugins = recipeDryRunExtraPlugins(recipe, recipeDirectory)
+  const mounts: RecipeDryRunMount[] = [
+    ...workspaces.map((workspace) => ({
+      type: "directory" as const,
+      ...(workspace.source ? { source: workspace.source } : {}),
+      target: workspace.target,
+      mode: workspace.mode,
+      metadata: workspace.metadata,
+      planned: workspace.generated ? "generated" as const : "existing" as const,
+    })),
+    ...extraPlugins.map((plugin) => ({
+      type: "directory" as const,
+      source: plugin.source,
+      target: plugin.target,
+      mode: "readonly" as const,
+      metadata: {
+        kind: "extra-plugin",
+        slug: plugin.slug,
+      },
+      planned: "existing" as const,
+    })),
+    ...(recipe.inputs?.mounts ?? []).map((mount) => ({
+      type: "directory" as const,
+      source: resolve(recipeDirectory, mount.source),
+      target: mount.target,
+      mode: mount.mode ?? "readwrite" as const,
+      ...(mount.metadata ? { metadata: mount.metadata } : {}),
+      planned: "existing" as const,
+    })),
+  ]
+
+  return {
+    runtime: {
+      backend: recipe.runtime?.backend ?? "wordpress-playground",
+      name: recipe.runtime?.name ?? "wp-codebox-recipe",
+      wp: recipe.runtime?.wp ?? DEFAULT_WORDPRESS_VERSION,
+      blueprint: recipe.runtime?.blueprint ?? { steps: [] },
+    },
+    artifacts: stripUndefined({
+      directory: options.artifactsDirectory ?? recipe.artifacts?.directory,
+    }),
+    mounts,
+    workspaces,
+    extra_plugins: extraPlugins,
+    secretEnv: (recipe.inputs?.secretEnv ?? []).map((name) => ({
+      name,
+      available: process.env[name] !== undefined,
+    })),
+    policy: {
+      ...policy,
+      valid: policyValidation.valid,
+      issues: policyValidation.issues,
+    },
+    workflow: {
+      steps: await recipeDryRunSteps(recipe, recipeDirectory, policy),
+    },
+  }
 }
 
 function printJsonFailureDiagnostic(output: { success: boolean; error?: { message?: string }; logs?: string[] }): void {
@@ -953,13 +1153,18 @@ async function parseRunOptions(args: string[]): Promise<RunOptions> {
 }
 
 function parseRecipeRunOptions(args: string[]): RecipeRunOptions {
-  const options: Partial<RecipeRunOptions> = { json: false }
+  const options: Partial<RecipeRunOptions> = { json: false, dryRun: false }
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]
 
     if (arg === "--json") {
       options.json = true
+      continue
+    }
+
+    if (arg === "--dry-run") {
+      options.dryRun = true
       continue
     }
 
@@ -1253,6 +1458,57 @@ function recipeWpCliCommandFromArgs(args: string[]): string {
   return recipeStepArgValue(args, "command")?.trim() ?? args.join(" ").trim()
 }
 
+async function recipeDryRunSteps(recipe: WorkspaceRecipe, recipeDirectory: string, policy: RuntimePolicy): Promise<RecipeDryRunStep[]> {
+  const steps: Array<Promise<RecipeDryRunStep>> = []
+  const pluginActivationCode = activateExtraPluginsCode(recipe)
+  if (pluginActivationCode) {
+    steps.push(recipeDryRunStep({ command: "wordpress.run-php", args: [`code=${pluginActivationCode}`] }, recipeDirectory, policy, -1, "activate-extra-plugins"))
+  }
+
+  for (const [index, step] of recipe.workflow.steps.entries()) {
+    steps.push(recipeDryRunStep(step, recipeDirectory, policy, index))
+  }
+
+  return Promise.all(steps)
+}
+
+async function recipeDryRunStep(step: WorkspaceRecipe["workflow"]["steps"][number], recipeDirectory: string, policy: RuntimePolicy, index: number, label?: string): Promise<RecipeDryRunStep> {
+  const resolved = await recipeExecutionSpec(step, recipeDirectory)
+  const allowed = policy.commands.includes(resolved.command)
+  return {
+    index,
+    command: label ?? step.command,
+    args: step.args ?? [],
+    parsedArgs: parseRecipeArgs(step.args ?? []),
+    resolvedCommand: resolved.command,
+    resolvedArgs: resolved.args,
+    resolvedParsedArgs: parseRecipeArgs(resolved.args),
+    policy: {
+      status: allowed ? "allowed" : "denied",
+      command: resolved.command,
+      allowedCommands: policy.commands,
+      approvals: policy.approvals,
+      filesystem: policy.filesystem,
+      secrets: policy.secrets,
+    },
+  }
+}
+
+function parseRecipeArgs(args: string[]): Record<string, string | true> {
+  const parsed: Record<string, string | true> = {}
+  for (const arg of args) {
+    const separator = arg.indexOf("=")
+    if (separator === -1) {
+      parsed[arg] = true
+      continue
+    }
+
+    parsed[arg.slice(0, separator)] = arg.slice(separator + 1)
+  }
+
+  return parsed
+}
+
 function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
   const commands = recipe.workflow.steps.map((step) => step.command.startsWith("wp-codebox.agent-") ? "wordpress.run-php" : step.command)
   if (recipeExtraPlugins(recipe).some((plugin) => plugin.activate !== false)) {
@@ -1312,6 +1568,44 @@ function recipeRunMetadata(recipe: WorkspaceRecipe, recipePath: string, workspac
       metadata: workspace.metadata,
     })),
   }
+}
+
+function recipeDryRunWorkspaces(recipe: WorkspaceRecipe, recipeDirectory: string): RecipeDryRunWorkspace[] {
+  return (recipe.inputs?.workspaces ?? []).map((workspace, index) => {
+    const slug = workspace.seed.slug ?? basename(resolve(recipeDirectory, workspace.seed.source ?? `workspace-${index}`))
+    const target = workspace.target ?? defaultWorkspaceTarget(workspace, slug)
+    const generated = workspace.seed.type !== "directory"
+    const metadata = {
+      kind: "recipe-workspace",
+      index,
+      seed: workspace.seed,
+      target,
+      dryRun: true,
+    }
+
+    return {
+      index,
+      ...(generated ? {} : { source: resolve(recipeDirectory, workspace.seed.source ?? "") }),
+      target,
+      mode: workspace.mode ?? "readwrite",
+      seed: workspace.seed,
+      generated,
+      metadata,
+    }
+  })
+}
+
+function recipeDryRunExtraPlugins(recipe: WorkspaceRecipe, recipeDirectory: string): RecipeDryRunExtraPlugin[] {
+  return recipeExtraPlugins(recipe).map((plugin) => {
+    const slug = recipeExtraPluginSlug(plugin)
+    return {
+      source: resolve(recipeDirectory, plugin.source),
+      slug,
+      target: `/wordpress/wp-content/plugins/${slug}`,
+      pluginFile: recipeExtraPluginFile(plugin),
+      activate: plugin.activate !== false,
+    }
+  })
 }
 
 async function prepareRecipeWorkspaces(recipe: WorkspaceRecipe, recipeDirectory: string): Promise<PreparedWorkspaceMount[]> {
