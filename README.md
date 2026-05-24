@@ -105,13 +105,47 @@ files without TypeScript source, then builds the WordPress plugin zip and checks
 that it contains the plugin bootstrap, README, and PHP sources without package
 metadata or generated artifacts.
 
+Versioning and release policy:
+
+1. Release the workspace packages together from one git tag so
+   `@chubes4/wp-codebox-cli`, `@chubes4/wp-codebox-core`, and
+   `@chubes4/wp-codebox-playground` stay on the same version.
+2. Keep `packages/wordpress-plugin/wp-codebox.php` `Version:` aligned with the
+   package version used for the matching plugin zip.
+3. Treat the npm package and plugin zip as one release unit: publish the CLI,
+   build the plugin zip from the same commit, and attach the zip to the release.
+4. Use conventional semver: patch for fixes and docs-only distribution updates,
+   minor for new commands or artifact fields, major for runtime contract breaks.
+
+Install notes by environment:
+
+1. Self-hosted WordPress control planes should install the CLI on the same host
+   that runs PHP, install `packages/wordpress-plugin/dist/wp-codebox.zip` as the
+   parent-site plugin, then set `wp_codebox_bin` to the resolved `wp-codebox`
+   binary path. Component paths can be supplied through
+   `wp_codebox_component_paths` or the matching filter.
+2. Studio or local development environments can run from a checkout with
+   `npm install`, `npm run build`, and `npm run wp-codebox -- ...`; install the
+   plugin zip into the local parent site and point `wp_codebox_bin` at either
+   the global binary or the checkout wrapper command used by that site.
+3. Hosted control planes should provide WP Codebox as managed infrastructure:
+   deploy the vetted CLI package and plugin zip from the same release, configure
+   the binary and component paths centrally with options or filters, and expose
+   only the parent-site abilities to products.
+
+CLI binary discovery from the plugin is intentionally host-configurable. The
+runner resolves the binary from ability input first, then `wp_codebox_bin`, then
+the `wp_codebox_bin` filter; multisite installs read the option from network
+options because the executable path is host-level configuration.
+
 Release checklist:
 
 1. Run `npm run check` from a clean checkout.
 2. Review `npm pack --workspace @chubes4/wp-codebox-cli --dry-run --json` before publishing the CLI package.
 3. Build `packages/wordpress-plugin/dist/wp-codebox.zip` with `npm run package:wordpress-plugin` and inspect `unzip -Z1 packages/wordpress-plugin/dist/wp-codebox.zip`.
-4. Install the CLI in the target environment and configure the WordPress plugin `wp_codebox_bin` option or filter to the resolved `wp-codebox` binary path.
-5. Install the plugin zip on the parent site and run the WordPress plugin smoke or equivalent ability registration check in that environment.
+4. Confirm package and plugin versions are aligned on the release commit.
+5. Install the CLI in the target environment and configure the WordPress plugin `wp_codebox_bin` option or filter to the resolved `wp-codebox` binary path.
+6. Install the plugin zip on the parent site and run the WordPress plugin smoke or equivalent ability registration check in that environment.
 
 ## Quick Start
 
