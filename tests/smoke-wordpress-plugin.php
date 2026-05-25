@@ -97,6 +97,7 @@ $assert( 'ability exposes policy and context schema', 'object' === ( $ability['i
 $assert( 'ability exposes generic mounts schema', 'array' === ( $ability['input_schema']['properties']['mounts']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['mounts']['items']['properties']['metadata']['type'] ?? '' ) );
 $assert( 'ability exposes inheritance request schema', 'object' === ( $ability['input_schema']['properties']['inherit']['type'] ?? '' ) && 'array' === ( $ability['input_schema']['properties']['inherit']['properties']['connectors']['type'] ?? '' ) );
 $assert( 'ability exposes connector credential envelope schema', 'object' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['type'] ?? '' ) && 'array' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['properties']['secrets']['type'] ?? '' ) );
+$assert( 'ability exposes external sandbox session schema', 'string' === ( $ability['input_schema']['properties']['sandbox_session_id']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['orchestrator']['type'] ?? '' ) && 'object' === ( $ability['output_schema']['properties']['session']['type'] ?? '' ) );
 $assert( 'ability omits raw code input', ! isset( $ability['input_schema']['properties']['code'] ) && ! isset( $ability['input_schema']['properties']['code_file'] ) );
 $assert( 'permission defaults to manage_options', true === call_user_func( $ability['permission_callback'] ) );
 
@@ -144,8 +145,12 @@ $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 				'exit_code' => 0,
 				'output'    => json_encode(
 					array(
-						'success' => true,
-						'runtime' => array( 'backend' => 'wordpress-playground' ),
+						'success'   => true,
+						'runtime'   => array( 'backend' => 'wordpress-playground' ),
+						'artifacts' => array(
+							'id'      => 'artifact-bundle-sha256-fixture',
+							'preview' => array( 'url' => 'http://127.0.0.1:12345' ),
+						),
 					)
 				),
 			);
@@ -156,6 +161,13 @@ $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 $result = $runner->run(
 	array(
 		'task'           => 'Run a chat-requested sandbox task.',
+		'sandbox_session_id' => 'parent-job-123',
+		'session_id'     => 'agent-chat-session-456',
+		'orchestrator'   => array(
+			'type'   => 'external-job-system',
+			'id'     => 'parent-control-plane',
+			'job_id' => 'job-123',
+		),
 		'artifacts_path' => $root . '/artifacts',
 		'secret_env'     => array( 'GITHUB_TOKEN' ),
 		'preview_hold_seconds' => 30,
@@ -179,6 +191,9 @@ $result = $runner->run(
 
 $assert( 'runner succeeds with filter-provided component paths', ! is_wp_error( $result ) && true === ( $result['success'] ?? false ) );
 $assert( 'runner schema is stable', ! is_wp_error( $result ) && 'wp-codebox/agent-task-run/v1' === ( $result['schema'] ?? '' ) );
+$assert( 'runner returns caller-owned sandbox session envelope', ! is_wp_error( $result ) && 'wp-codebox/sandbox-session/v1' === ( $result['session']['schema'] ?? '' ) && 'parent-job-123' === ( $result['session']['id'] ?? '' ) && 'external-orchestrator' === ( $result['session']['persistence'] ?? '' ) );
+$assert( 'runner keeps agent session separate from sandbox session', ! is_wp_error( $result ) && 'agent-chat-session-456' === ( $result['session']['agent_session_id'] ?? '' ) && str_contains( $captured_recipe, 'session-id=agent-chat-session-456' ) );
+$assert( 'runner returns orchestrator correlation and artifact refs', ! is_wp_error( $result ) && 'job-123' === ( $result['session']['orchestrator']['job_id'] ?? '' ) && 'artifact-bundle-sha256-fixture' === ( $result['session']['artifacts']['bundle_id'] ?? '' ) );
 $assert( 'runner returns normalized task input for legacy task', ! is_wp_error( $result ) && 'wp-codebox/task-input/v1' === ( $result['task_input']['schema'] ?? '' ) && 'Run a chat-requested sandbox task.' === ( $result['task_input']['goal'] ?? '' ) );
 $assert( 'runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
 $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node ' ) );

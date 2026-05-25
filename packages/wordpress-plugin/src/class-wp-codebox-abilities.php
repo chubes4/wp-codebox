@@ -29,6 +29,8 @@ final class WP_Codebox_Abilities {
 			$task_input_schema  = self::task_input_schema();
 			$mount_schema      = self::mount_schema();
 			$inherit_schema    = self::inherit_schema();
+			$session_schema    = self::sandbox_session_schema();
+			$session_input     = self::sandbox_session_input_schema();
 			$artifact_id_schema = array(
 				'artifact_id'    => array(
 					'type'        => 'string',
@@ -86,6 +88,8 @@ final class WP_Codebox_Abilities {
 							),
 							'mounts'                 => $mount_schema,
 							'inherit'                => $inherit_schema,
+							'sandbox_session_id'     => $session_input['sandbox_session_id'],
+							'orchestrator'           => $session_input['orchestrator'],
 							'secret_env'             => array(
 								'type'        => 'array',
 								'description' => 'Explicit parent environment variable names to expose inside the sandbox. Prefer connector-scoped inheritance credentials for product flows. Values are read from the parent process and are not accepted in this payload.',
@@ -125,6 +129,7 @@ final class WP_Codebox_Abilities {
 						'properties' => array(
 							'success'   => array( 'type' => 'boolean' ),
 							'schema'    => array( 'type' => 'string' ),
+							'session'   => $session_schema,
 							'task'      => array( 'type' => 'string' ),
 							'task_input' => $task_input_schema,
 							'wp'        => array( 'type' => 'string' ),
@@ -174,6 +179,8 @@ final class WP_Codebox_Abilities {
 							),
 							'mounts'                 => $mount_schema,
 							'inherit'                => $inherit_schema,
+							'sandbox_session_id'     => $session_input['sandbox_session_id'],
+							'orchestrator'           => $session_input['orchestrator'],
 							'secret_env'             => array(
 								'type'  => 'array',
 								'items' => array( 'type' => 'string' ),
@@ -193,6 +200,7 @@ final class WP_Codebox_Abilities {
 						'properties' => array(
 							'success'     => array( 'type' => 'boolean' ),
 							'schema'      => array( 'type' => 'string' ),
+							'session'     => $session_schema,
 							'tasks'       => array( 'type' => 'array' ),
 							'task_inputs' => array(
 								'type'  => 'array',
@@ -433,6 +441,41 @@ final class WP_Codebox_Abilities {
 						'secrets'   => array( 'type' => 'array', 'items' => $credential_secret_schema ),
 					),
 				),
+			),
+		);
+	}
+
+	/** @return array<string,mixed> */
+	private static function sandbox_session_input_schema(): array {
+		return array(
+			'sandbox_session_id' => array(
+				'type'        => 'string',
+				'description' => 'Caller-owned sandbox session id for external job/session systems. WP Codebox returns it in the response but does not persist sessions itself.',
+			),
+			'orchestrator'       => array(
+				'type'        => 'object',
+				'description' => 'Optional caller-owned job/session metadata, such as external job system, job id, or control-plane id. Values are copied into the response session envelope for correlation only.',
+				'properties'  => array(
+					'id'     => array( 'type' => 'string' ),
+					'type'   => array( 'type' => 'string' ),
+					'job_id' => array( 'type' => 'string' ),
+				),
+			),
+		);
+	}
+
+	/** @return array<string,mixed> */
+	private static function sandbox_session_schema(): array {
+		return array(
+			'type'       => 'object',
+			'properties' => array(
+				'schema'           => array( 'type' => 'string' ),
+				'id'               => array( 'type' => 'string' ),
+				'status'           => array( 'type' => 'string' ),
+				'persistence'      => array( 'type' => 'string' ),
+				'agent_session_id' => array( 'type' => 'string' ),
+				'orchestrator'     => array( 'type' => 'object' ),
+				'artifacts'        => array( 'type' => 'object' ),
 			),
 		);
 	}

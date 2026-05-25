@@ -11,6 +11,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	private const SCHEMA = 'wp-codebox/agent-task-run/v1';
 	private const BATCH_SCHEMA = 'wp-codebox/agent-task-batch/v1';
+	private const SESSION_SCHEMA = 'wp-codebox/sandbox-session/v1';
 	private const TASK_INPUT_SCHEMA = 'wp-codebox/task-input/v1';
 
 	/** @var array<string, callable> */
@@ -40,6 +41,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 		$task        = (string) $task_input['goal'];
 		$task_prompt = $this->task_input_prompt( $task_input );
+		$session_id  = $this->sandbox_session_id( $input );
 
 		$raw_code_input = $this->reject_raw_code_input( $input );
 		if ( is_wp_error( $raw_code_input ) ) {
@@ -109,6 +111,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		return array(
 			'success'   => true,
 			'schema'    => self::SCHEMA,
+			'session'   => $this->sandbox_session( $session_id, 'completed', $input, $decoded, $artifacts ),
 			'task'      => $task,
 			'task_input' => $task_input,
 			'wp'        => $wp_version,
@@ -140,6 +143,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 		$tasks        = array_map( static fn( array $task_input ): string => (string) $task_input['goal'], $task_inputs );
 		$task_prompts = array_map( array( $this, 'task_input_prompt' ), $task_inputs );
+		$session_id   = $this->sandbox_session_id( $input );
 
 		$paths = $this->resolve_component_paths( $input );
 		if ( is_wp_error( $paths ) ) {
@@ -205,6 +209,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		return array(
 			'success'     => true,
 			'schema'      => self::BATCH_SCHEMA,
+			'session'     => $this->sandbox_session( $session_id, 'completed', $input, $decoded, $artifacts ),
 			'tasks'       => $tasks,
 			'task_inputs' => $task_inputs,
 			'concurrency' => $concurrency,
@@ -919,6 +924,51 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		return bin2hex( random_bytes( 16 ) );
+	}
+
+	private function sandbox_session_id( array $input ): string {
+		$id = trim( (string) ( $input['sandbox_session_id'] ?? '' ) );
+		if ( '' !== $id ) {
+			return $id;
+		}
+
+		$id = trim( (string) ( $input['session_id'] ?? '' ) );
+		return '' !== $id ? $id : $this->generate_run_id();
+	}
+
+	/** @param array<string,mixed> $input Ability input. @param array<string,mixed> $run Decoded CLI run output. */
+	private function sandbox_session( string $session_id, string $status, array $input, array $run, string $artifacts ): array {
+		$session = array(
+			'schema'      => self::SESSION_SCHEMA,
+			'id'          => $session_id,
+			'status'      => $status,
+			'persistence' => 'external-orchestrator',
+			'artifacts'   => array_filter(
+				array(
+					'path'       => $artifacts,
+					'bundle_id'  => is_array( $run['artifacts'] ?? null ) ? (string) ( $run['artifacts']['id'] ?? '' ) : '',
+					'preview_url' => is_array( $run['artifacts']['preview'] ?? null ) ? (string) ( $run['artifacts']['preview']['url'] ?? '' ) : '',
+				),
+				static fn( mixed $value ): bool => '' !== $value
+			),
+		);
+
+		if ( ! empty( $input['session_id'] ) ) {
+			$session['agent_session_id'] = (string) $input['session_id'];
+		}
+
+		if ( isset( $input['orchestrator'] ) && is_array( $input['orchestrator'] ) ) {
+			$session['orchestrator'] = array_filter(
+				array(
+					'id'     => isset( $input['orchestrator']['id'] ) ? (string) $input['orchestrator']['id'] : '',
+					'type'   => isset( $input['orchestrator']['type'] ) ? (string) $input['orchestrator']['type'] : '',
+					'job_id' => isset( $input['orchestrator']['job_id'] ) ? (string) $input['orchestrator']['job_id'] : '',
+				),
+				static fn( mixed $value ): bool => '' !== $value
+			);
+		}
+
+		return $session;
 	}
 
 	/** @return array<string,mixed>|WP_Error */

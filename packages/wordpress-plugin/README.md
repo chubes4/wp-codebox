@@ -44,6 +44,13 @@ task with bounded concurrency. This is the parent-site primitive for fan-out
 workflows such as assigning several GitHub issues to separate sandbox coding
 agents.
 
+Parent control planes that need durable job/session state should own that state
+outside WP Codebox and pass a caller-owned `sandbox_session_id`. WP Codebox
+returns a `wp-codebox/sandbox-session/v1` envelope with that id, optional
+`orchestrator` correlation metadata, and artifact references, but it does not
+create host-site job tables or depend on a specific queue. See
+`docs/sandbox-session-contract.md`.
+
 Both abilities accept optional `provider` and `model` fields. These seed the
 disposable sandbox's Data Machine agent configuration for the selected execution
 mode. Provider plugins are supplied with `provider_plugin_paths`; WP Codebox
