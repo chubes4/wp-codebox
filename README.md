@@ -753,7 +753,7 @@ WP Codebox does not own:
 ## Near-Term Gaps
 
 - Define redaction guarantees.
-- Define multi-user sandbox session lifecycle, retention, quotas, cancellation, and audit records.
+- Wire parent orchestrators to the external sandbox session contract for durable lifecycle, retention, quotas, cancellation, and audit records.
 - Define reviewed apply-back adapters for bot-authored PRs, direct apply, and package export.
 - Add visual previews, parsed test command output, and richer risk flags to frontend review payloads.
 

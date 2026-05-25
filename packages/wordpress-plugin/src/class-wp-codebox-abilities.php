@@ -469,10 +469,24 @@ final class WP_Codebox_Abilities {
 		return array(
 			'type'       => 'object',
 			'properties' => array(
-				'schema'           => array( 'type' => 'string' ),
-				'id'               => array( 'type' => 'string' ),
-				'status'           => array( 'type' => 'string' ),
-				'persistence'      => array( 'type' => 'string' ),
+				'schema'           => array(
+					'type'        => 'string',
+					'description' => 'Session envelope contract version. Use wp-codebox/sandbox-session/v1.',
+				),
+				'id'               => array(
+					'type'        => 'string',
+					'description' => 'Caller-owned sandbox session id echoed for external orchestration correlation.',
+				),
+				'status'           => array(
+					'type'        => 'string',
+					'enum'        => array( 'completed' ),
+					'description' => 'Synchronous WP Codebox run status. Durable queued/running/cancelled/expired state belongs to the external orchestrator.',
+				),
+				'persistence'      => array(
+					'type'        => 'string',
+					'enum'        => array( 'external-orchestrator' ),
+					'description' => 'WP Codebox does not persist host-site session lifecycle state; callers own durable records.',
+				),
 				'agent_session_id' => array( 'type' => 'string' ),
 				'orchestrator'     => array( 'type' => 'object' ),
 				'artifacts'        => array( 'type' => 'object' ),
