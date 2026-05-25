@@ -1,0 +1,54 @@
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": {
+    "backend": "wordpress-playground",
+    "name": "seeded-content-lab",
+    "wp": "7.0",
+    "blueprint": {
+      "steps": [
+        {
+          "step": "installTheme",
+          "themeData": {
+            "resource": "wordpress.org/themes",
+            "slug": "twentytwentyfive"
+          },
+          "options": {
+            "activate": true
+          }
+        },
+        {
+          "step": "login",
+          "username": "admin",
+          "password": "password"
+        }
+      ]
+    }
+  },
+  "inputs": {
+    "mounts": [
+      {
+        "source": "../../simple-plugin",
+        "target": "/wordpress/wp-content/plugins/plugin-under-test",
+        "mode": "readwrite",
+        "metadata": {
+          "kind": "component",
+          "slug": "plugin-under-test",
+          "editable": true
+        }
+      }
+    ]
+  },
+  "workflow": {
+    "steps": [
+      {
+        "command": "wordpress.run-php",
+        "args": [
+          "code-file=./examples/recipes/cookbook/seeded-content-seed.php"
+        ]
+      }
+    ]
+  },
+  "artifacts": {
+    "directory": "./artifacts"
+  }
+}

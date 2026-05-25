@@ -76,6 +76,7 @@ async function main(): Promise<void> {
     "examples/recipes/simple-plugin.json",
     "examples/recipes/seeded-plugin-workspace.json",
     "examples/recipes/bench-plugin.json",
+    "examples/recipes/cookbook/seeded-content.json",
   ]) {
     const recipe = JSON.parse(await readFile(resolve(repoRoot, recipePath), "utf8"))
     assert(validate(recipe), `${recipePath} does not validate against discovery schema: ${ajv.errorsText(validate.errors)}`)

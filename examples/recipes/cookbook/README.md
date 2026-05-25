@@ -12,6 +12,41 @@ smoke testing.
 
 ## Available recipes
 
+### `seeded-content.json`
+
+Boots a Playground with Twenty Twenty-Five active, mounts your plugin under
+test, and seeds a compact editorial fixture: published pages, a posts page,
+published and draft posts, categories, tags, an editor user, and an author
+user. Pair with `--preview-hold` and use the seed step's JSON output to open
+the home page, blog index, first post, category archive, author archive, or
+admin list tables.
+
+**Replace** the `inputs.mounts[0].source` value in the recipe with the path
+to the plugin you want to exercise against seeded content. The default points
+at `../simple-plugin` so the recipe runs out of the box.
+
+```bash
+# Edit examples/recipes/cookbook/seeded-content.json:
+#   "source": "../../path/to/your-plugin"
+#
+# Then:
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/cookbook/seeded-content.json \
+  --preview-hold 30m \
+  --json
+```
+
+The seed step emits object IDs plus useful preview and admin URLs. This recipe
+intentionally creates fixture data with WP APIs; it does not import or snapshot
+content from a parent site.
+
+#### Extending
+
+Edit `seeded-content-seed.php` when you need more fixture shape: additional
+post statuses, custom post types registered by your plugin, taxonomy terms,
+menus, options, or block combinations. Keep any production or private content
+out of this recipe; parent-site snapshots belong to a separate workflow.
+
 ### `bbpress-reply-editor.json`
 
 Boots a Playground with bbPress installed from `wordpress.org/plugins`, mounts

@@ -437,6 +437,7 @@ Example recipes:
 - `examples/recipes/wp-cli.json`: prove WP-CLI commands mutate the same runtime observed by later steps.
 - `examples/recipes/seeded-plugin-workspace.json`: create a disposable plugin scaffold, mutate it, and capture diffs.
 - `examples/recipes/datamachine-agent-bundle.json`: mount Agents API and Data Machine, then import a bundle through `wordpress.ability`.
+- `examples/recipes/cookbook/seeded-content.json`: realistic fixture content shape with pages, posts, categories, tags, editor/author users, and preview/admin URLs.
 - `examples/recipes/cookbook/bbpress-reply-editor.json`: realistic bbPress dependency shape; once external source downloads are allowed, bbPress can be supplied by WordPress.org zip URL instead of an adjacent checkout.
 
 Supported workspace seeds:
