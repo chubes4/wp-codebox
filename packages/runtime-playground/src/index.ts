@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { copyFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
-import { createServer } from "node:net"
+import { createServer as createHttpServer, request as httpRequest, type IncomingHttpHeaders, type ServerResponse } from "node:http"
+import { createServer as createNetServer } from "node:net"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { assertRuntimeCommandAllowed } from "@chubes4/wp-codebox-core"
 import {
@@ -120,6 +121,11 @@ interface PlaygroundCliServer {
   }
   serverUrl: string
   [Symbol.asyncDispose](): Promise<void>
+}
+
+interface PlaygroundPreviewProxy {
+  serverUrl: string
+  dispose(): Promise<void>
 }
 
 interface PlaygroundCliModule {
@@ -977,9 +983,9 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
     }
 
     try {
-      return await runCLI({
+      const server = await runCLI({
         command: "server",
-        port: this.spec.preview?.port ?? 0,
+        port: 0,
         quiet: true,
         skipBrowser: true,
         mount: this.mounts.map((mount) => ({
@@ -990,6 +996,12 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
         "site-url": this.spec.preview?.siteUrl,
         blueprint: playgroundBlueprint(this.spec.environment.blueprint, this.spec.policy),
       })
+
+      if (!this.spec.preview?.port) {
+        return server
+      }
+
+      return await withPreviewProxy(server, this.spec.preview.port)
     } catch (error) {
       if (this.spec.preview?.port && errorHasCode(error, "EADDRINUSE")) {
         throw new PlaygroundPreviewPortUnavailableError(this.spec.preview.port, error)
@@ -1016,6 +1028,110 @@ export function createPlaygroundRuntimeBackend(): RuntimeBackend {
   return new PlaygroundRuntimeBackend()
 }
 
+async function withPreviewProxy(server: PlaygroundCliServer, port: number): Promise<PlaygroundCliServer> {
+  let proxy: PlaygroundPreviewProxy | undefined
+  try {
+    proxy = await startPreviewProxy(server.serverUrl, port)
+  } catch (error) {
+    await server[Symbol.asyncDispose]()
+    throw error
+  }
+
+  return {
+    ...server,
+    serverUrl: proxy.serverUrl,
+    async [Symbol.asyncDispose]() {
+      await proxy.dispose()
+      await server[Symbol.asyncDispose]()
+    },
+  }
+}
+
+async function startPreviewProxy(targetUrl: string, port: number): Promise<PlaygroundPreviewProxy> {
+  const target = new URL(targetUrl)
+  const proxy = createHttpServer((incoming, outgoing) => {
+    const targetRequest = httpRequest(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        method: incoming.method,
+        path: incoming.url ?? "/",
+        headers: proxyRequestHeaders(incoming.headers, target),
+      },
+      (targetResponse) => {
+        const chunks: Buffer[] = []
+        targetResponse.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        targetResponse.on("end", () => {
+          const body = Buffer.concat(chunks)
+          outgoing.writeHead(targetResponse.statusCode ?? 502, targetResponse.statusMessage, proxyResponseHeaders(targetResponse.headers, body.byteLength))
+          outgoing.end(body)
+        })
+      },
+    )
+
+    targetRequest.on("error", (error) => writeProxyError(outgoing, error))
+    incoming.on("error", () => targetRequest.destroy())
+    incoming.pipe(targetRequest)
+  })
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    proxy.once("error", rejectListen)
+    proxy.listen(port, "127.0.0.1", () => resolveListen())
+  })
+
+  return {
+    serverUrl: `http://127.0.0.1:${port}`,
+    async dispose() {
+      if (!proxy.listening) {
+        return
+      }
+
+      await new Promise<void>((resolveClose, rejectClose) => {
+        proxy.close((error) => error ? rejectClose(error) : resolveClose())
+      })
+    },
+  }
+}
+
+function proxyRequestHeaders(headers: IncomingHttpHeaders, target: URL): IncomingHttpHeaders {
+  const forwarded = { ...headers }
+  delete forwarded.connection
+  delete forwarded.host
+  delete forwarded["transfer-encoding"]
+
+  return {
+    ...forwarded,
+    host: target.host,
+  }
+}
+
+function proxyResponseHeaders(headers: IncomingHttpHeaders, bodyLength: number): IncomingHttpHeaders {
+  const forwarded = { ...headers }
+  delete forwarded.connection
+  delete forwarded["content-length"]
+  delete forwarded["transfer-encoding"]
+
+  return {
+    ...forwarded,
+    "content-length": String(bodyLength),
+  }
+}
+
+function writeProxyError(outgoing: ServerResponse, error: Error): void {
+  if (outgoing.headersSent) {
+    outgoing.destroy(error)
+    return
+  }
+
+  const body = Buffer.from(`Preview proxy failed: ${error.message}\n`, "utf8")
+  outgoing.writeHead(502, {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": String(body.byteLength),
+  })
+  outgoing.end(body)
+}
+
 function errorHasCode(error: unknown, code: string): boolean {
   if (!error || typeof error !== "object") {
     return false
@@ -1033,7 +1149,7 @@ function errorHasCode(error: unknown, code: string): boolean {
 }
 
 async function assertPreviewPortAvailable(port: number): Promise<void> {
-  const server = createServer()
+  const server = createNetServer()
   try {
     await new Promise<void>((resolveListen, rejectListen) => {
       server.once("error", rejectListen)
