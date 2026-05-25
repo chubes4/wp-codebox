@@ -32,6 +32,7 @@ import type {
   ArtifactManifest,
   ArtifactManifestFile,
   ArtifactPreview,
+  ArtifactReviewBrowserSummary,
   ArtifactSpec,
   ExecutionResult,
   ExecutionSpec,
@@ -45,6 +46,7 @@ import type {
   RuntimeInfo,
   Snapshot,
 } from "@chubes4/wp-codebox-core"
+import type { ConsoleMessage, Page } from "playwright"
 
 function now(): string {
   return new Date().toISOString()
@@ -141,6 +143,29 @@ interface PlaygroundCliModule {
   }): Promise<PlaygroundCliServer>
 }
 
+interface BrowserProbeArtifact {
+  url: string
+  files: {
+    console?: string
+    errors?: string
+    screenshot?: string
+    summary: string
+  }
+  summary: {
+    consoleMessages: number
+    errors: number
+    screenshot: boolean
+  }
+}
+
+interface BrowserProbeErrorRecord {
+  type: "pageerror" | "probe-error"
+  name: string
+  message: string
+  stack?: string
+  timestamp: string
+}
+
 export class PlaygroundRuntimeBackend implements RuntimeBackend {
   readonly kind = "wordpress-playground" as const
 
@@ -157,6 +182,7 @@ class PlaygroundRuntime implements Runtime {
   private readonly commands: ExecutionResult[] = []
   private readonly observations: ObservationResult[] = []
   private readonly events: LifecycleEvent[] = []
+  private readonly browserProbes: BrowserProbeArtifact[] = []
   private readonly artifactRoot: string
   private cliServerPromise?: Promise<PlaygroundCliServer>
 
@@ -316,7 +342,9 @@ class PlaygroundRuntime implements Runtime {
     const testResultsPath = join(filesDirectory, "test-results.json")
     const reviewPath = join(filesDirectory, "review.json")
     const redactor = new ArtifactRedactor(this.spec.secretEnv)
+    await this.redactBrowserArtifacts(redactor)
     const preview = await this.previewInfo(createdAt, spec.previewHoldSeconds)
+    const browser = this.browserReviewSummary()
 
     const runtime = await this.info()
     const capturedMounts = await this.captureMountedFiles(filesDirectory, redactor)
@@ -363,6 +391,7 @@ class PlaygroundRuntime implements Runtime {
       runtimeCreatedAt: this.createdAt,
       mounts: this.mounts,
       preview,
+      browser,
     })
     const artifactFiles = {
       changedFiles: relative(this.artifactRoot, changedFilesPath),
@@ -370,6 +399,7 @@ class PlaygroundRuntime implements Runtime {
       testResults: relative(this.artifactRoot, testResultsPath),
       review: relative(this.artifactRoot, reviewPath),
       mountDiffs: relative(this.artifactRoot, diffsPath),
+      ...(browser ? { browser: "files/browser/summary.json" } : {}),
     }
     metadata.artifacts = artifactFiles
     const blueprintAfter = buildBlueprintAfter({
@@ -401,6 +431,7 @@ class PlaygroundRuntime implements Runtime {
       fileEntry(patchPath, "patch", "text/x-diff"),
       fileEntry(testResultsPath, "test-results", "application/json"),
       fileEntry(reviewPath, "review", "application/json"),
+      ...this.browserManifestFiles(),
       ...mountDiffs.map((diff) => fileEntry(join(this.artifactRoot, diff.artifactPath), "diff", "text/x-diff")),
       ...capturedMounts.files.map((file) =>
         fileEntry(join(this.artifactRoot, file.artifactPath), "file", file.contentType),
@@ -731,7 +762,113 @@ class PlaygroundRuntime implements Runtime {
       return this.runCorePhpunit(spec)
     }
 
+    if (spec.command === "wordpress.browser-probe") {
+      return this.runBrowserProbe(spec)
+    }
+
     throw new Error(`No Playground command handler is registered for: ${spec.command}`)
+  }
+
+  private async runBrowserProbe(spec: ExecutionSpec): Promise<string> {
+    const server = await this.bootPlayground()
+    const args = spec.args ?? []
+    const urlArg = argValue(args, "url")?.trim()
+    if (!urlArg) {
+      throw new Error("wordpress.browser-probe requires url=<path-or-url>")
+    }
+
+    const capture = new Set(commaListArg(args, "capture"))
+    if (capture.size === 0) {
+      capture.add("console")
+      capture.add("errors")
+      capture.add("screenshot")
+    }
+
+    for (const item of capture) {
+      if (!["console", "errors", "screenshot"].includes(item)) {
+        throw new Error(`wordpress.browser-probe capture supports console, errors, screenshot: ${item}`)
+      }
+    }
+
+    const waitFor = argValue(args, "wait-for")?.trim() || "domcontentloaded"
+    const durationMs = durationArg(args, "duration", 0)
+    const targetUrl = resolveBrowserProbeUrl(urlArg, server.serverUrl)
+    const browserDirectory = join(this.artifactRoot, "files", "browser")
+    await mkdir(browserDirectory, { recursive: true })
+
+    const consoleMessages: Record<string, unknown>[] = []
+    const errors: BrowserProbeErrorRecord[] = []
+    const consolePath = join(browserDirectory, "console.jsonl")
+    const errorsPath = join(browserDirectory, "errors.jsonl")
+    const screenshotPath = join(browserDirectory, "screenshot.png")
+    const summaryPath = join(browserDirectory, "summary.json")
+    const startedAt = now()
+    const { chromium } = await import("playwright")
+    const browser = await chromium.launch()
+
+    try {
+      const page = await browser.newPage()
+      if (capture.has("console")) {
+        page.on("console", (message) => consoleMessages.push(serializeBrowserConsoleMessage(message)))
+      }
+      if (capture.has("errors")) {
+        page.on("pageerror", (error) => errors.push(serializeBrowserError("pageerror", error)))
+      }
+
+      await navigateBrowserProbe(page, targetUrl, waitFor, durationMs)
+      if (durationMs > 0 && waitFor !== "duration") {
+        await page.waitForTimeout(durationMs)
+      }
+
+      if (capture.has("screenshot")) {
+        await page.screenshot({ path: screenshotPath, fullPage: true })
+      }
+    } catch (error) {
+      errors.push(serializeBrowserError("probe-error", error))
+      throw error
+    } finally {
+      await browser.close()
+      if (capture.has("console")) {
+        await writeFile(consolePath, jsonLines(consoleMessages))
+      }
+      if (capture.has("errors")) {
+        await writeFile(errorsPath, jsonLines(errors))
+      }
+
+      const artifact: BrowserProbeArtifact = {
+        url: targetUrl,
+        files: {
+          ...(capture.has("console") ? { console: "files/browser/console.jsonl" } : {}),
+          ...(capture.has("errors") ? { errors: "files/browser/errors.jsonl" } : {}),
+          ...(capture.has("screenshot") ? { screenshot: "files/browser/screenshot.png" } : {}),
+          summary: "files/browser/summary.json",
+        },
+        summary: {
+          consoleMessages: consoleMessages.length,
+          errors: errors.length,
+          screenshot: capture.has("screenshot"),
+        },
+      }
+      this.browserProbes.push(artifact)
+      await writeFile(summaryPath, `${JSON.stringify({
+        schema: "wp-codebox/browser-probe/v1",
+        url: targetUrl,
+        waitFor,
+        durationMs,
+        capture: [...capture].sort(),
+        startedAt,
+        finishedAt: now(),
+        files: artifact.files,
+        summary: artifact.summary,
+      }, null, 2)}\n`)
+    }
+
+    return `${JSON.stringify({
+      command: "wordpress.browser-probe",
+      url: targetUrl,
+      files: this.browserProbes.at(-1)?.files,
+      summary: this.browserProbes.at(-1)?.summary,
+    }, null, 2)}\n`
   }
 
   private async runPhp(spec: ExecutionSpec): Promise<string> {
@@ -1022,10 +1159,139 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
 
     return { type: spec.type, path: spec.path ?? null }
   }
+
+  private browserReviewSummary(): ArtifactReviewBrowserSummary | undefined {
+    if (this.browserProbes.length === 0) {
+      return undefined
+    }
+
+    const consoleMessages = this.browserProbes.reduce((total, probe) => total + probe.summary.consoleMessages, 0)
+    const errors = this.browserProbes.reduce((total, probe) => total + probe.summary.errors, 0)
+    const screenshots = this.browserProbes.filter((probe) => probe.summary.screenshot).length
+    return {
+      summary: `Browser probe captured ${consoleMessages} console message${consoleMessages === 1 ? "" : "s"}, ${errors} error${errors === 1 ? "" : "s"}, and ${screenshots} screenshot${screenshots === 1 ? "" : "s"}.`,
+      probes: this.browserProbes.map((probe) => ({
+        url: probe.url,
+        consoleMessages: probe.summary.consoleMessages,
+        errors: probe.summary.errors,
+        screenshot: probe.files.screenshot,
+        console: probe.files.console,
+        errorsFile: probe.files.errors,
+      })),
+    }
+  }
+
+  private browserManifestFiles(): ArtifactManifestFile[] {
+    if (this.browserProbes.length === 0) {
+      return []
+    }
+
+    const files = new Map<string, { kind: string; contentType: string }>()
+    for (const probe of this.browserProbes) {
+      if (probe.files.console) {
+        files.set(probe.files.console, { kind: "browser-console", contentType: "application/x-ndjson" })
+      }
+      if (probe.files.errors) {
+        files.set(probe.files.errors, { kind: "browser-errors", contentType: "application/x-ndjson" })
+      }
+      if (probe.files.screenshot) {
+        files.set(probe.files.screenshot, { kind: "browser-screenshot", contentType: "image/png" })
+      }
+      files.set(probe.files.summary, { kind: "browser-summary", contentType: "application/json" })
+    }
+
+    return [...files.entries()].map(([path, entry]) => fileEntry(join(this.artifactRoot, path), entry.kind, entry.contentType))
+  }
+
+  private async redactBrowserArtifacts(redactor: ArtifactRedactor): Promise<void> {
+    for (const probe of this.browserProbes) {
+      for (const path of [probe.files.console, probe.files.errors, probe.files.summary]) {
+        if (!path) {
+          continue
+        }
+
+        const absolutePath = join(this.artifactRoot, path)
+        try {
+          await writeFile(absolutePath, redactor.redact(path, await readFile(absolutePath, "utf8")))
+        } catch {
+          // Browser capture is best-effort; preserve artifact collection if a file vanished.
+        }
+      }
+    }
+  }
 }
 
 export function createPlaygroundRuntimeBackend(): RuntimeBackend {
   return new PlaygroundRuntimeBackend()
+}
+
+async function navigateBrowserProbe(page: Page, url: string, waitFor: string, durationMs: number): Promise<void> {
+  if (["domcontentloaded", "load", "networkidle"].includes(waitFor)) {
+    await page.goto(url, { waitUntil: waitFor as "domcontentloaded" | "load" | "networkidle", timeout: 30_000 })
+    return
+  }
+
+  if (waitFor.startsWith("selector:")) {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 })
+    const selector = waitFor.slice("selector:".length).trim()
+    if (!selector) {
+      throw new Error("wordpress.browser-probe wait-for=selector:<selector> requires a selector")
+    }
+    await page.locator(selector).first().waitFor({ timeout: 30_000 })
+    return
+  }
+
+  if (waitFor === "duration") {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 })
+    await page.waitForTimeout(durationMs > 0 ? durationMs : 1000)
+    return
+  }
+
+  throw new Error(`wordpress.browser-probe wait-for supports domcontentloaded, load, networkidle, selector:<selector>, duration: ${waitFor}`)
+}
+
+function resolveBrowserProbeUrl(pathOrUrl: string, baseUrl: string): string {
+  try {
+    return new URL(pathOrUrl).toString()
+  } catch {
+    return new URL(pathOrUrl, baseUrl).toString()
+  }
+}
+
+function durationArg(args: string[], name: string, fallbackMs: number): number {
+  const raw = argValue(args, name)?.trim()
+  if (!raw) {
+    return fallbackMs
+  }
+
+  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s)$/)
+  if (!match) {
+    throw new Error(`${name} must be a duration like 500ms or 2s`)
+  }
+
+  const value = Number.parseFloat(match[1])
+  return Math.max(0, Math.round(match[2] === "ms" ? value : value * 1000))
+}
+
+function serializeBrowserConsoleMessage(message: ConsoleMessage): Record<string, unknown> {
+  return {
+    type: message.type(),
+    text: message.text(),
+    location: message.location(),
+    timestamp: now(),
+  }
+}
+
+function serializeBrowserError(type: BrowserProbeErrorRecord["type"], error: unknown): BrowserProbeErrorRecord {
+  if (error instanceof Error) {
+    return { type, name: error.name, message: error.message, stack: error.stack, timestamp: now() }
+  }
+
+  return { type, name: "Error", message: String(error), timestamp: now() }
+}
+
+function jsonLines(records: unknown[]): string {
+  return records.length > 0 ? `${records.map((record) => JSON.stringify(record)).join("\n")}\n` : ""
 }
 
 async function withPreviewProxy(server: PlaygroundCliServer, port: number): Promise<PlaygroundCliServer> {

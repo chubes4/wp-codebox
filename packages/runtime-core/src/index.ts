@@ -347,8 +347,21 @@ export interface ArtifactReview {
     changedFiles: string
     testResults?: string
   }
+  browser?: ArtifactReviewBrowserSummary
   redaction?: ArtifactRedactionSummary
   riskFlags: string[]
+}
+
+export interface ArtifactReviewBrowserSummary {
+  summary: string
+  probes: Array<{
+    url: string
+    consoleMessages: number
+    errors: number
+    screenshot?: string
+    console?: string
+    errorsFile?: string
+  }>
 }
 
 export interface ArtifactPreview {

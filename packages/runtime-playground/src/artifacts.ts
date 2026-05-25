@@ -8,6 +8,7 @@ import type {
   ArtifactProvenance,
   ArtifactRedactionSummary,
   ArtifactReview,
+  ArtifactReviewBrowserSummary,
   ArtifactTestResults,
   MountSpec,
   RuntimeCreateSpec,
@@ -191,6 +192,7 @@ export function buildArtifactReview({
   runtimeCreatedAt,
   mounts,
   preview,
+  browser,
 }: {
   artifactId: string
   createdAt: string
@@ -201,6 +203,7 @@ export function buildArtifactReview({
   runtimeCreatedAt: string
   mounts: MountSpec[]
   preview?: ArtifactPreview
+  browser?: ArtifactReviewBrowserSummary
 }): ArtifactReview {
   const stats = {
     added: changedFiles.files.filter((file) => file.status === "added").length,
@@ -279,6 +282,7 @@ export function buildArtifactReview({
       changedFiles: "files/changed-files.json",
       testResults: "files/test-results.json",
     },
+    ...(browser ? { browser } : {}),
     riskFlags: [],
   }
 }

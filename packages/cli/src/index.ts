@@ -407,6 +407,19 @@ const commandCatalog: CommandMetadata[] = [
     recipe: true,
   },
   {
+    id: "wordpress.browser-probe",
+    description: "Open the live Playground preview in Playwright and capture browser console, page errors, and screenshot artifacts.",
+    acceptedArgs: [
+      { name: "url", description: "Preview path or absolute URL to visit.", required: true, format: "path or URL" },
+      { name: "wait-for", description: "Navigation wait condition.", format: "domcontentloaded|load|networkidle|selector:<selector>|duration" },
+      { name: "duration", description: "Extra capture duration, or wait time when wait-for=duration.", format: "duration, e.g. 2s or 500ms" },
+      { name: "capture", description: "Comma-separated artifacts to capture.", format: "console,errors,screenshot" },
+    ],
+    outputShape: "JSON summary plus files/browser/console.jsonl, errors.jsonl, summary.json, and screenshot.png when captured.",
+    policyRequirement: "Runtime policy commands must include wordpress.browser-probe.",
+    recipe: true,
+  },
+  {
     id: "wp-codebox.agent-runtime-probe",
     description: "Recipe-only probe that boots Agents API, Data Machine, and Data Machine Code and verifies the stack loads.",
     acceptedArgs: [
@@ -1934,6 +1947,32 @@ async function validateRecipeStepArgs(step: WorkspaceRecipe["workflow"]["steps"]
 
   if (step.command === "wordpress.wp-cli" && recipeWpCliCommandFromArgs(step.args ?? []).length === 0) {
     addIssue("missing-command", `${path}.args`, "wordpress.wp-cli requires a non-empty command.")
+    return
+  }
+
+  if (step.command === "wordpress.browser-probe") {
+    if (!recipeStepArgValue(step.args ?? [], "url")?.trim()) {
+      addIssue("missing-url", `${path}.args`, "wordpress.browser-probe requires url=<path-or-url>.")
+    }
+
+    const waitFor = recipeStepArgValue(step.args ?? [], "wait-for")
+    if (waitFor && !["domcontentloaded", "load", "networkidle", "duration"].includes(waitFor) && !waitFor.startsWith("selector:")) {
+      addIssue("invalid-wait-for", `${path}.args`, "wordpress.browser-probe wait-for must be domcontentloaded, load, networkidle, selector:<selector>, or duration.")
+    }
+
+    const duration = recipeStepArgValue(step.args ?? [], "duration")
+    if (duration && !/^(\d+(?:\.\d+)?)(ms|s)$/.test(duration)) {
+      addIssue("invalid-duration", `${path}.args`, "wordpress.browser-probe duration must look like 500ms or 2s.")
+    }
+
+    const capture = recipeStepArgValue(step.args ?? [], "capture")
+    if (capture) {
+      for (const item of capture.split(",").map((value) => value.trim()).filter(Boolean)) {
+        if (!["console", "errors", "screenshot"].includes(item)) {
+          addIssue("invalid-capture", `${path}.args`, `wordpress.browser-probe capture does not support: ${item}`)
+        }
+      }
+    }
     return
   }
 

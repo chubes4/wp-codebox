@@ -198,7 +198,7 @@ Options:
   --recipe <path>     Workspace recipe JSON file for recipe-run or recipe validate.
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
-  --arg <key=value>    Command argument. Repeatable. Recipe commands include wordpress.run-php, wordpress.phpunit, wordpress.core-phpunit, wordpress.wp-cli, wordpress.ability, and wordpress.bench.
+  --arg <key=value>    Command argument. Repeatable. Recipe commands include wordpress.run-php, wordpress.phpunit, wordpress.core-phpunit, wordpress.wp-cli, wordpress.ability, wordpress.bench, and wordpress.browser-probe.
   --wp <version>       WordPress version for Playground. Defaults to 7.0; accepts latest, trunk, nightly, or numeric versions.
   --artifacts <dir>    Artifact root directory.
   --preview-hold <n>   Keep the live Playground preview available after a successful run. Accepts seconds or minutes, e.g. 30s or 15m; max 3600s.
