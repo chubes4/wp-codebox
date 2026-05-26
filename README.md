@@ -6,6 +6,8 @@ WordPress has historically lacked a clean scratch space for code execution. Mode
 
 WP Codebox is the runtime boundary for agent-built or workflow-built outputs. It is not the agent framework, the review UI, the deploy system, or the production site mutator. The WordPress plugin in this repo is one optional host adapter (useful when the host *is* a WordPress site); the core CLI/runtime works anywhere `node` can run.
 
+For the durable architecture boundary, see [`docs/architecture.md`](./docs/architecture.md).
+
 ```text
 Any host: CLI, CI, mobile, Node service, WP plugin, GitHub Action, ...
   -> WP Codebox
