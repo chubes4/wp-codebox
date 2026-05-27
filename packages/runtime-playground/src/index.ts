@@ -1326,13 +1326,9 @@ async function startPreviewProxy(targetUrl: string, port: number, bind: string):
         headers: proxyRequestHeaders(incoming.headers, target),
       },
       (targetResponse) => {
-        const chunks: Buffer[] = []
-        targetResponse.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-        targetResponse.on("end", () => {
-          const body = Buffer.concat(chunks)
-          outgoing.writeHead(targetResponse.statusCode ?? 502, targetResponse.statusMessage, proxyResponseHeaders(targetResponse.headers, body.byteLength))
-          outgoing.end(body)
-        })
+        outgoing.writeHead(targetResponse.statusCode ?? 502, targetResponse.statusMessage, proxyResponseHeaders(targetResponse.headers))
+        targetResponse.on("error", (error) => outgoing.destroy(error))
+        targetResponse.pipe(outgoing)
       },
     )
 
@@ -1380,16 +1376,12 @@ function proxyRequestHeaders(headers: IncomingHttpHeaders, target: URL): Incomin
   }
 }
 
-function proxyResponseHeaders(headers: IncomingHttpHeaders, bodyLength: number): IncomingHttpHeaders {
+function proxyResponseHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   const forwarded = { ...headers }
   delete forwarded.connection
-  delete forwarded["content-length"]
   delete forwarded["transfer-encoding"]
 
-  return {
-    ...forwarded,
-    "content-length": String(bodyLength),
-  }
+  return forwarded
 }
 
 function writeProxyError(outgoing: ServerResponse, error: Error): void {
