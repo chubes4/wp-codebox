@@ -2,7 +2,7 @@
 import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createWriteStream } from "node:fs"
 import { createHash } from "node:crypto"
-import { execFile } from "node:child_process"
+import { execFile, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { Readable } from "node:stream"
@@ -853,6 +853,11 @@ const secretEnvPolicy: RuntimePolicy = {
 async function main(args: string[]): Promise<number> {
   const command = args.shift()
 
+  const jspiRespawnExitCode = maybeRespawnWithJspi(command, args)
+  if (jspiRespawnExitCode !== undefined) {
+    return jspiRespawnExitCode
+  }
+
   if (!command || command === "help" || command === "--help" || command === "-h") {
     printHelp()
     return command ? 0 : 1
@@ -979,6 +984,57 @@ async function main(args: string[]): Promise<number> {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
   printJsonFailureDiagnostic(output)
   return output.success ? 0 : 1
+}
+
+function maybeRespawnWithJspi(command: string | undefined, args: string[]): number | undefined {
+  if (!command || !["boot", "run", "recipe-run"].includes(command)) {
+    return undefined
+  }
+
+  if (!shouldRespawnWithJspi()) {
+    return undefined
+  }
+
+  const requiredFlags = ["--experimental-wasm-jspi", "--experimental-wasm-stack-switching"]
+  const missingFlags = requiredFlags.filter((flag) => !process.execArgv.includes(flag))
+  const child = spawnSync(process.execPath, [...missingFlags, ...process.execArgv, ...process.argv.slice(1, 2), command, ...args], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      WP_CODEBOX_JSPI_RESPAWNED: "1",
+    },
+  })
+
+  if (child.error) {
+    return undefined
+  }
+
+  if (child.signal) {
+    process.kill(process.pid, child.signal)
+    return 1
+  }
+
+  return child.status ?? 1
+}
+
+function shouldRespawnWithJspi(): boolean {
+  if (process.env.WP_CODEBOX_JSPI_RESPAWNED || process.env.WP_CODEBOX_NO_JSPI_RESPAWN || process.env.PLAYGROUND_NO_JSPI_RESPAWN) {
+    return false
+  }
+
+  if ("Suspending" in WebAssembly) {
+    return false
+  }
+
+  if (process.versions.bun || "Deno" in globalThis) {
+    return false
+  }
+
+  if (Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10) < 23) {
+    return false
+  }
+
+  return !["--experimental-wasm-jspi", "--experimental-wasm-stack-switching"].every((flag) => process.execArgv.includes(flag))
 }
 
 function parseDiscoveryJsonOption(args: string[]): boolean {

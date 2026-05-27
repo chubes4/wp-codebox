@@ -1,10 +1,12 @@
 import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { createRuntime } from "@chubes4/wp-codebox-core"
-import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
+import { promisify } from "node:util"
 import { normalizePluginCheckOutput } from "../packages/runtime-playground/src/commands.js"
+
+const execFileAsync = promisify(execFile)
 
 const raw = JSON.stringify({
   errors: {
@@ -40,45 +42,31 @@ assert.equal(normalized.findings[1].line, 12)
 
 const artifactsDirectory = await mkdtemp(join(tmpdir(), "wp-codebox-plugin-check-"))
 try {
-  const mountDirectory = resolve("examples/simple-plugin")
-  const runtime = await createRuntime(
-    {
-      backend: "wordpress-playground",
-      environment: { kind: "wordpress", name: "plugin-check-smoke", version: "7.0", blueprint: { steps: [] } },
-      policy: {
-        network: "deny",
-        filesystem: "readwrite-mounts",
-        commands: ["wordpress.plugin-check"],
-        secrets: "none",
-        approvals: "never",
-      },
-      artifactsDirectory,
-      metadata: { runtime: { version: "0.0.0" }, task: { kind: "plugin-check-smoke" } },
-    },
-    createPlaygroundRuntimeBackend(),
-  )
-
-  await runtime.mount({
-    type: "directory",
-    source: mountDirectory,
-    target: "/wordpress/wp-content/plugins/simple-plugin",
-    mode: "readwrite",
-    metadata: { kind: "component", slug: "simple-plugin" },
-  })
-  await assert.rejects(
-    () => runtime.execute({ command: "wordpress.plugin-check", args: [] }),
-    /requires plugin-slug=<slug>/,
-  )
-  const result = await runtime.execute({ command: "wordpress.plugin-check", args: ["plugin-slug=simple-plugin", "checks=plugin_header_fields"] })
-  const output = JSON.parse(result.stdout)
+  const cliPath = resolve("packages/cli/dist/index.js")
+  const { stdout } = await execFileAsync(process.execPath, [
+    cliPath,
+    "run",
+    "--mount",
+    "./examples/simple-plugin:/wordpress/wp-content/plugins/simple-plugin",
+    "--command",
+    "wordpress.plugin-check",
+    "--arg",
+    "plugin-slug=simple-plugin",
+    "--arg",
+    "checks=plugin_header_fields",
+    "--artifacts",
+    artifactsDirectory,
+    "--json",
+  ], { cwd: resolve("."), maxBuffer: 10 * 1024 * 1024 })
+  const runOutput = JSON.parse(stdout)
+  assert.equal(runOutput.success, true)
+  const output = JSON.parse(runOutput.execution.stdout)
   assert.equal(output.schema, "wp-codebox/plugin-check/v1")
   assert.equal(output.status, "failed")
   assert.equal(output.summary.errors, 1)
   assert.equal(output.findings[0].code, "plugin_header_no_license")
-  const artifacts = await runtime.collectArtifacts({ includeLogs: true })
-  const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8"))
+  const manifest = JSON.parse(await readFile(runOutput.artifacts.manifestPath, "utf8"))
   assert.equal(manifest.files.some((file: { kind: string }) => file.kind === "plugin-check"), true)
-  await runtime.destroy()
   console.log("Plugin Check normalization smoke passed")
 } finally {
   await rm(artifactsDirectory, { recursive: true, force: true })

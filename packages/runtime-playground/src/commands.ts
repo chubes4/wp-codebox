@@ -105,44 +105,6 @@ export interface PluginCheckNormalizedOutput {
   rawFormat: "json" | "text"
 }
 
-export function pluginCheckRunCode(pluginSlug: string, checkSlugs: string[] = []): string {
-  return `if ( ! function_exists( 'activate_plugin' ) ) {
-    require_once ABSPATH . 'wp-admin/includes/plugin.php';
-}
-
-$plugin_slug = ${JSON.stringify(pluginSlug)};
-$check_slugs = json_decode( ${JSON.stringify(JSON.stringify(checkSlugs))}, true );
-$plugin_check_file = WP_PLUGIN_DIR . '/plugin-check/plugin.php';
-if ( file_exists( $plugin_check_file ) && ! is_plugin_active( 'plugin-check/plugin.php' ) ) {
-    $activation = activate_plugin( 'plugin-check/plugin.php' );
-    if ( is_wp_error( $activation ) ) {
-        throw new RuntimeException( $activation->get_error_message() );
-    }
-}
-
-if ( ! class_exists( '\\WordPress\\Plugin_Check\\Checker\\CLI_Runner' ) ) {
-    throw new RuntimeException( 'The official Plugin Check plugin is not loaded in this Playground runtime.' );
-}
-
-$runner = new \\WordPress\\Plugin_Check\\Checker\\CLI_Runner();
-$runner->set_experimental_flag( false );
-$runner->set_check_slugs( is_array( $check_slugs ) ? $check_slugs : array() );
-$runner->set_categories( array() );
-$runner->set_plugin( $plugin_slug );
-$runner->set_slug( $plugin_slug );
-$runner->set_mode( 'new' );
-$result = $runner->run();
-$errors = $result ? $result->get_errors() : array();
-$warnings = $result ? $result->get_warnings() : array();
-
-echo wp_json_encode( array(
-    'schema' => 'wordpress/plugin-check/raw/v1',
-    'plugin' => $plugin_slug,
-    'errors' => $errors,
-    'warnings' => $warnings,
-), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );`
-}
-
 export function normalizePluginCheckOutput(rawOutput: string, exitCode: number, pluginSlug: string): PluginCheckNormalizedOutput {
   const parsed = parsePluginCheckJson(rawOutput)
   const findings = parsed ? collectPluginCheckFindings(parsed) : []

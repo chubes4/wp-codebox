@@ -26,7 +26,7 @@ import {
   type MountDiffsResult,
 } from "./artifacts.js"
 import { playgroundBlueprint } from "./blueprint.js"
-import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, corePhpunitRunCode, isSafeEnvName, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, phpBody, phpunitRunCode, pluginCheckRunCode, positiveIntegerArg, shellArgv, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
+import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, corePhpunitRunCode, isSafeEnvName, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, phpBody, phpunitRunCode, positiveIntegerArg, shellArgv, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
 import type {
   ArtifactBundle,
   ArtifactManifest,
@@ -951,9 +951,16 @@ class PlaygroundRuntime implements Runtime {
       throw new Error(`wordpress.plugin-check target plugin is not installed or mounted at ${pluginPath}`)
     }
 
-    const rawResponse = await this.runPlaygroundCommand("wordpress.plugin-check", server, { code: this.bootstrapPhpCode(pluginCheckRunCode(pluginSlug, checkSlugs), []) })
-    assertPlaygroundResponseOk("wordpress.plugin-check", rawResponse)
-    const rawOutput = rawResponse.text
+    const rawResponse = await this.runWpCliCommand(server, [
+      "plugin",
+      "check",
+      pluginSlug,
+      "--format=strict-json",
+      "--fields=file,line,column,type,code,message,docs",
+      "--mode=new",
+      ...(checkSlugs.length > 0 ? [`--checks=${checkSlugs.join(",")}`] : []),
+    ])
+    const rawOutput = cleanWpCliOutput(rawResponse.text)
     const normalized = normalizePluginCheckOutput(rawOutput, rawResponse.exitCode ?? 0, pluginSlug)
     const pluginCheckDirectory = join(this.artifactRoot, "files", "plugin-check")
     await mkdir(pluginCheckDirectory, { recursive: true })
