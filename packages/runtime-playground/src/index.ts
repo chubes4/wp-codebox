@@ -80,6 +80,15 @@ class PlaygroundCommandCrashError extends Error {
   }
 }
 
+class PlaygroundCliExitError extends Error {
+  readonly code = "wp-codebox-playground-cli-exited"
+
+  constructor(readonly exitCode: number) {
+    super(`WordPress Playground CLI exited while booting the runtime with exit code ${exitCode}.`)
+    this.name = "PlaygroundCliExitError"
+  }
+}
+
 class PlaygroundPreviewPortUnavailableError extends Error {
   readonly code = "wp-codebox-preview-port-in-use"
 
@@ -113,6 +122,20 @@ function playgroundFailureMessage(command: string, response: PlaygroundRunRespon
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+async function runPlaygroundCliWithoutProcessExit<T>(callback: () => Promise<T>): Promise<T> {
+  const exit = process.exit
+  process.exit = ((code?: string | number | null | undefined): never => {
+    const exitCode = typeof code === "number" ? code : 1
+    throw new PlaygroundCliExitError(exitCode)
+  }) as typeof process.exit
+
+  try {
+    return await callback()
+  } finally {
+    process.exit = exit
+  }
 }
 
 interface PlaygroundCliServer {
@@ -1290,7 +1313,7 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
     }
 
     try {
-      const server = await runCLI({
+      const server = await runPlaygroundCliWithoutProcessExit(() => runCLI({
         command: "server",
         port: 0,
         quiet: true,
@@ -1302,7 +1325,7 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
         wp: this.spec.environment.version,
         "site-url": this.spec.preview?.siteUrl,
         blueprint: playgroundBlueprint(this.spec.environment.blueprint, this.spec.policy, this.spec.preview?.siteUrl),
-      })
+      }))
 
       if (!this.spec.preview?.port) {
         return server
