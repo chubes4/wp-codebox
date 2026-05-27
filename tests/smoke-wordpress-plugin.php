@@ -28,16 +28,23 @@ if ( ! function_exists( 'is_wp_error' ) ) {
 	function is_wp_error( $thing ): bool { return $thing instanceof WP_Error; }
 }
 
-$GLOBALS['wp_codebox_registered_abilities'] = array();
-$GLOBALS['wp_codebox_filters']              = array();
-$GLOBALS['wp_codebox_options']              = array();
-$GLOBALS['wp_codebox_site_options']         = array();
+$GLOBALS['wp_codebox_registered_abilities']         = array();
+$GLOBALS['wp_codebox_registered_ability_categories'] = array();
+$GLOBALS['wp_codebox_filters']                      = array();
+$GLOBALS['wp_codebox_options']                      = array();
+$GLOBALS['wp_codebox_site_options']                 = array();
 
 function wp_register_ability( string $name, array $definition ): void {
 	$GLOBALS['wp_codebox_registered_abilities'][ $name ] = $definition;
 }
 
-function doing_action( string $hook ): bool { return 'wp_abilities_api_init' === $hook; }
+function wp_register_ability_category( string $slug, array $args ): void {
+	$GLOBALS['wp_codebox_registered_ability_categories'][ $slug ] = $args;
+}
+
+function doing_action( string $hook ): bool {
+	return in_array( $hook, array( 'wp_abilities_api_init', 'wp_abilities_api_categories_init' ), true );
+}
 function add_action( string $hook, callable $callback, int $priority = 10 ): void {}
 function add_filter( string $hook, callable $callback, int $priority = 10 ): void { $GLOBALS['wp_codebox_filters'][ $hook ] = $callback; }
 function current_user_can( string $capability ): bool { return 'manage_options' === $capability; }
@@ -85,6 +92,10 @@ echo "WP Codebox WordPress plugin - smoke\n";
 
 new WP_Codebox_Data_Machine_Pending_Actions();
 new WP_Codebox_Abilities();
+
+$category = $GLOBALS['wp_codebox_registered_ability_categories']['wp-codebox'] ?? null;
+$assert( 'wp-codebox ability category registered', is_array( $category ) );
+$assert( 'category exposes label and description', isset( $category['label'] ) && isset( $category['description'] ) );
 
 $ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task'] ?? null;
 $assert( 'run-agent-task ability registered', is_array( $ability ) );

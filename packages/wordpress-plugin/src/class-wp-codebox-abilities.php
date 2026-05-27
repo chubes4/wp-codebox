@@ -20,8 +20,40 @@ final class WP_Codebox_Abilities {
 			return;
 		}
 
+		$this->register_category();
 		$this->register();
 		self::$registered = true;
+	}
+
+	/**
+	 * Register the `wp-codebox` ability category.
+	 *
+	 * As of WordPress 6.9 the Abilities API requires the category to be
+	 * registered before any ability that declares it; unregistered categories
+	 * cause `wp_register_ability()` to return `null` and silently drop the
+	 * ability. Categories must be registered on `wp_abilities_api_categories_init`.
+	 */
+	private function register_category(): void {
+		if ( ! function_exists( 'wp_register_ability_category' ) ) {
+			return;
+		}
+
+		$register_category = static function (): void {
+			wp_register_ability_category(
+				'wp-codebox',
+				array(
+					'label'       => 'WP Codebox',
+					'description' => 'Disposable WordPress Playground sandbox runs, artifact capture, and reviewed apply-back.',
+				)
+			);
+		};
+
+		if ( function_exists( 'doing_action' ) && doing_action( 'wp_abilities_api_categories_init' ) ) {
+			$register_category();
+			return;
+		}
+
+		add_action( 'wp_abilities_api_categories_init', $register_category );
 	}
 
 	private function register(): void {
