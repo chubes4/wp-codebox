@@ -8,10 +8,10 @@ import { basename, dirname, join, resolve } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
-import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, type ArtifactBundle, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
-import { captureStdout, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
+import { captureStdout, printArtifactVerifyHumanOutput, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
 
 interface CommandMetadata {
   id: string
@@ -135,6 +135,11 @@ interface WorkspacePolicyOptions {
   writableRoots: string[]
   hiddenPaths: string[]
   gitBacked: boolean
+  json: boolean
+}
+
+interface ArtifactVerifyOptions {
+  bundleDirectory: string
   json: boolean
 }
 
@@ -975,6 +980,25 @@ async function main(args: string[]): Promise<number> {
     return output.passed ? 0 : 1
   }
 
+  if (command === "artifacts") {
+    const subcommand = args.shift()
+    if (subcommand !== "verify") {
+      console.error(`Unknown artifacts command: ${subcommand ?? ""}`)
+      printHelp()
+      return 1
+    }
+
+    const options = parseArtifactVerifyOptions(args)
+    const output = await verifyArtifacts(options)
+    if (!options.json) {
+      printArtifactVerifyHumanOutput(output)
+      return output.valid ? 0 : 1
+    }
+
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    return output.valid ? 0 : 1
+  }
+
   if (command === "commands") {
     const json = parseDiscoveryJsonOption(args)
     const output = commandCatalogOutput()
@@ -1527,6 +1551,10 @@ async function validateRecipe(options: RecipeValidateOptions): Promise<RecipeVal
       error: serializeError(error),
     }
   }
+}
+
+async function verifyArtifacts(options: ArtifactVerifyOptions): Promise<ArtifactBundleVerificationResult> {
+  return verifyArtifactBundle(resolve(options.bundleDirectory))
 }
 
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, callback: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -2504,6 +2532,40 @@ function parseRecipeValidateOptions(args: string[]): RecipeValidateOptions {
   }
 
   return options as RecipeValidateOptions
+}
+
+function parseArtifactVerifyOptions(args: string[]): ArtifactVerifyOptions {
+  const options: Partial<ArtifactVerifyOptions> = { json: false }
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+
+    if (arg === "--json") {
+      options.json = true
+      continue
+    }
+
+    const [name, inlineValue] = arg.split("=", 2)
+    const value = inlineValue ?? args[++index]
+
+    if (!name.startsWith("--") || value === undefined) {
+      throw new Error(`Invalid argument: ${arg}`)
+    }
+
+    switch (name) {
+      case "--bundle":
+        options.bundleDirectory = value
+        break
+      default:
+        throw new Error(`Unknown option: ${name}`)
+    }
+  }
+
+  if (!options.bundleDirectory) {
+    throw new Error("Missing required option: --bundle")
+  }
+
+  return options as ArtifactVerifyOptions
 }
 
 function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe {

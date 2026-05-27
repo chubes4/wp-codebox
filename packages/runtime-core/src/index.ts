@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto"
+import { readdir, readFile, stat } from "node:fs/promises"
+import { isAbsolute, join, normalize, sep } from "node:path"
 
 export * from "./workspace-policy.js"
 
@@ -659,6 +661,338 @@ export interface ArtifactBundle {
   preview?: ArtifactPreview
   contentDigest: string
   createdAt: string
+}
+
+export type ArtifactBundleVerificationViolationCode =
+  | "missing-manifest"
+  | "malformed-manifest"
+  | "invalid-manifest-shape"
+  | "invalid-path"
+  | "missing-file"
+  | "orphaned-file"
+  | "digest-mismatch"
+  | "bundle-id-mismatch"
+  | "malformed-reference"
+  | "review-evidence-mismatch"
+
+export interface ArtifactBundleVerificationViolation {
+  code: ArtifactBundleVerificationViolationCode
+  path: string
+  message: string
+  file?: string
+}
+
+export interface ArtifactBundleVerificationResult {
+  schema: "wp-codebox/artifact-bundle-verification/v1"
+  bundleDirectory: string
+  valid: boolean
+  violations: ArtifactBundleVerificationViolation[]
+  manifest?: ArtifactManifest
+}
+
+export interface VerifyArtifactBundleOptions {
+  manifestFileName?: string
+  allowOrphanedFiles?: boolean
+}
+
+export async function verifyArtifactBundle(directory: string, options: VerifyArtifactBundleOptions = {}): Promise<ArtifactBundleVerificationResult> {
+  const bundleDirectory = normalize(directory)
+  const manifestFileName = options.manifestFileName ?? "manifest.json"
+  const manifestPath = join(bundleDirectory, manifestFileName)
+  const violations: ArtifactBundleVerificationViolation[] = []
+  let manifest: ArtifactManifest | undefined
+
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8")) as ArtifactManifest
+  } catch (error) {
+    violations.push({
+      code: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing-manifest" : "malformed-manifest",
+      path: manifestFileName,
+      message: (error as NodeJS.ErrnoException).code === "ENOENT" ? "manifest.json is missing." : "manifest.json is not valid JSON.",
+    })
+    return artifactBundleVerificationResult(bundleDirectory, violations)
+  }
+
+  if (!isArtifactManifestShape(manifest)) {
+    violations.push({
+      code: "invalid-manifest-shape",
+      path: manifestFileName,
+      message: "manifest.json does not match the WP Codebox artifact manifest shape.",
+    })
+    return artifactBundleVerificationResult(bundleDirectory, violations)
+  }
+
+  const manifestFiles = new Set<string>()
+  for (const [index, file] of manifest.files.entries()) {
+    const fieldPath = `manifest.files[${index}].path`
+    const pathViolation = artifactPathViolation(file.path, fieldPath)
+    if (pathViolation) {
+      violations.push(pathViolation)
+      continue
+    }
+
+    manifestFiles.add(file.path)
+    try {
+      const fileStat = await stat(join(bundleDirectory, file.path))
+      if (!fileStat.isFile()) {
+        violations.push({ code: "missing-file", path: fieldPath, file: file.path, message: `Manifest path is not a file: ${file.path}` })
+      }
+    } catch {
+      violations.push({ code: "missing-file", path: fieldPath, file: file.path, message: `Manifest file is missing: ${file.path}` })
+    }
+  }
+
+  if (!manifestFiles.has(manifestFileName)) {
+    violations.push({
+      code: "invalid-manifest-shape",
+      path: "manifest.files",
+      file: manifestFileName,
+      message: "manifest.json must list itself in manifest.files.",
+    })
+  }
+
+  if (!options.allowOrphanedFiles) {
+    for (const file of await listBundleFiles(bundleDirectory)) {
+      if (!manifestFiles.has(file)) {
+        violations.push({ code: "orphaned-file", path: file, file, message: `Bundle file is not listed in manifest.json: ${file}` })
+      }
+    }
+  }
+
+  await verifyContentDigest(bundleDirectory, manifest, violations)
+  verifyBundleId(manifest, violations)
+  await verifyMetadataReferences(bundleDirectory, manifestFiles, violations)
+  await verifyReviewEvidence(bundleDirectory, manifest, manifestFiles, violations)
+
+  return artifactBundleVerificationResult(bundleDirectory, violations, manifest)
+}
+
+export async function calculateArtifactContentDigest(directory: string, inputs: string[]): Promise<string> {
+  const hash = createHash("sha256").update("wp-codebox/artifact-content/v1\n")
+  for (const [index, input] of inputs.entries()) {
+    if (index > 0) {
+      hash.update("\n")
+    }
+    hash.update(`${input}\n`)
+    hash.update(await readFile(join(directory, input)))
+  }
+
+  return hash.digest("hex")
+}
+
+function artifactBundleVerificationResult(bundleDirectory: string, violations: ArtifactBundleVerificationViolation[], manifest?: ArtifactManifest): ArtifactBundleVerificationResult {
+  return {
+    schema: "wp-codebox/artifact-bundle-verification/v1",
+    bundleDirectory,
+    valid: violations.length === 0,
+    violations,
+    ...(manifest ? { manifest } : {}),
+  }
+}
+
+function isArtifactManifestShape(value: unknown): value is ArtifactManifest {
+  if (!isRecord(value)) {
+    return false
+  }
+
+  const contentDigest = value.contentDigest
+  return typeof value.id === "string"
+    && typeof value.createdAt === "string"
+    && isRecord(value.runtime)
+    && isRecord(contentDigest)
+    && contentDigest.algorithm === "sha256"
+    && Array.isArray(contentDigest.inputs)
+    && contentDigest.inputs.every((input) => typeof input === "string")
+    && typeof contentDigest.value === "string"
+    && Array.isArray(value.files)
+    && value.files.every(isArtifactManifestFileShape)
+}
+
+function isArtifactManifestFileShape(value: unknown): value is ArtifactManifestFile {
+  return isRecord(value)
+    && typeof value.path === "string"
+    && typeof value.kind === "string"
+    && typeof value.contentType === "string"
+}
+
+function artifactPathViolation(path: string, fieldPath: string): ArtifactBundleVerificationViolation | undefined {
+  if (path.length === 0) {
+    return { code: "invalid-path", path: fieldPath, file: path, message: "Artifact paths must not be empty." }
+  }
+
+  if (path.includes("\\") || isAbsolute(path) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) {
+    return { code: "invalid-path", path: fieldPath, file: path, message: `Artifact path must be bundle-relative and local: ${path}` }
+  }
+
+  const normalized = normalize(path).split(sep).join("/")
+  if (normalized === ".." || normalized.startsWith("../") || path.split("/").includes("..")) {
+    return { code: "invalid-path", path: fieldPath, file: path, message: `Artifact path must not contain traversal: ${path}` }
+  }
+
+  return undefined
+}
+
+async function verifyContentDigest(directory: string, manifest: ArtifactManifest, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  for (const [index, input] of manifest.contentDigest.inputs.entries()) {
+    const pathViolation = artifactPathViolation(input, `manifest.contentDigest.inputs[${index}]`)
+    if (pathViolation) {
+      violations.push(pathViolation)
+      return
+    }
+  }
+
+  if (!/^[a-f0-9]{64}$/.test(manifest.contentDigest.value)) {
+    violations.push({ code: "invalid-manifest-shape", path: "manifest.contentDigest.value", message: "contentDigest.value must be a lowercase sha256 hex digest." })
+    return
+  }
+
+  try {
+    const value = await calculateArtifactContentDigest(directory, manifest.contentDigest.inputs)
+    if (value !== manifest.contentDigest.value) {
+      violations.push({
+        code: "digest-mismatch",
+        path: "manifest.contentDigest.value",
+        message: `contentDigest.value does not match declared inputs: expected ${value}, got ${manifest.contentDigest.value}`,
+      })
+    }
+  } catch (error) {
+    violations.push({ code: "digest-mismatch", path: "manifest.contentDigest.inputs", message: `Unable to calculate content digest: ${errorMessage(error)}` })
+  }
+}
+
+function verifyBundleId(manifest: ArtifactManifest, violations: ArtifactBundleVerificationViolation[]): void {
+  const prefix = "artifact-bundle-sha256-"
+  if (manifest.id.startsWith(prefix) && manifest.id !== `${prefix}${manifest.contentDigest.value}`) {
+    violations.push({
+      code: "bundle-id-mismatch",
+      path: "manifest.id",
+      message: `Bundle id must match content digest: expected ${prefix}${manifest.contentDigest.value}, got ${manifest.id}`,
+    })
+  }
+}
+
+async function verifyMetadataReferences(directory: string, manifestFiles: Set<string>, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  let metadata: unknown
+  try {
+    metadata = JSON.parse(await readFile(join(directory, "metadata.json"), "utf8"))
+  } catch {
+    return
+  }
+
+  const artifacts = isRecord(metadata) ? metadata.artifacts : undefined
+  if (!isRecord(artifacts)) {
+    return
+  }
+
+  for (const [key, value] of Object.entries(artifacts)) {
+    for (const reference of artifactReferenceStrings(value)) {
+      validateArtifactReference(reference, `metadata.artifacts.${key}`, manifestFiles, violations)
+    }
+  }
+}
+
+async function verifyReviewEvidence(directory: string, manifest: ArtifactManifest, manifestFiles: Set<string>, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  let review: unknown
+  try {
+    review = JSON.parse(await readFile(join(directory, "files/review.json"), "utf8"))
+  } catch {
+    return
+  }
+
+  if (!isRecord(review) || !isRecord(review.evidence)) {
+    violations.push({ code: "malformed-reference", path: "files/review.json", file: "files/review.json", message: "Review artifact does not include an evidence object." })
+    return
+  }
+
+  const evidence = review.evidence
+  if (typeof evidence.artifactContentDigest === "string" && evidence.artifactContentDigest !== manifest.contentDigest.value) {
+    violations.push({ code: "review-evidence-mismatch", path: "files/review.json:evidence.artifactContentDigest", file: "files/review.json", message: "Review artifact content digest does not match manifest contentDigest.value." })
+  }
+
+  if (typeof evidence.patch === "string") {
+    validateArtifactReference(evidence.patch, "files/review.json:evidence.patch", manifestFiles, violations)
+    if (typeof evidence.patchSha256 === "string") {
+      try {
+        const patchSha256 = createHash("sha256").update(await readFile(join(directory, evidence.patch))).digest("hex")
+        if (patchSha256 !== evidence.patchSha256) {
+          violations.push({ code: "review-evidence-mismatch", path: "files/review.json:evidence.patchSha256", file: "files/review.json", message: "Review patchSha256 does not match the referenced patch file." })
+        }
+      } catch (error) {
+        violations.push({ code: "review-evidence-mismatch", path: "files/review.json:evidence.patchSha256", file: evidence.patch, message: `Unable to hash review patch evidence: ${errorMessage(error)}` })
+      }
+    }
+  }
+
+  if (typeof evidence.changedFiles === "string") {
+    validateArtifactReference(evidence.changedFiles, "files/review.json:evidence.changedFiles", manifestFiles, violations)
+    await verifyChangedFileEvidence(directory, evidence.changedFiles, review, violations)
+  }
+}
+
+async function verifyChangedFileEvidence(directory: string, changedFilesPath: string, review: Record<string, unknown>, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  try {
+    const changedFiles = JSON.parse(await readFile(join(directory, changedFilesPath), "utf8"))
+    const changedFileList = isRecord(changedFiles) && Array.isArray(changedFiles.files) ? changedFiles.files : undefined
+    const reviewChangedFiles = Array.isArray(review.changedFiles) ? review.changedFiles : undefined
+    if (!changedFileList || !reviewChangedFiles) {
+      return
+    }
+
+    const changedFileKeys = new Set(changedFileList.filter(isRecord).map((file) => `${file.path}:${file.status}`))
+    for (const file of reviewChangedFiles.filter(isRecord)) {
+      if (!changedFileKeys.has(`${file.path}:${file.status}`)) {
+        violations.push({ code: "review-evidence-mismatch", path: "files/review.json:changedFiles", file: "files/review.json", message: `Review changed-file evidence is not present in ${changedFilesPath}: ${String(file.path)}` })
+      }
+    }
+  } catch (error) {
+    violations.push({ code: "review-evidence-mismatch", path: "files/review.json:evidence.changedFiles", file: changedFilesPath, message: `Unable to read changed-file evidence: ${errorMessage(error)}` })
+  }
+}
+
+function validateArtifactReference(reference: string, fieldPath: string, manifestFiles: Set<string>, violations: ArtifactBundleVerificationViolation[]): void {
+  const pathViolation = artifactPathViolation(reference, fieldPath)
+  if (pathViolation) {
+    violations.push(pathViolation)
+    return
+  }
+
+  if (!manifestFiles.has(reference)) {
+    violations.push({ code: "malformed-reference", path: fieldPath, file: reference, message: `Artifact reference is not listed in manifest.json: ${reference}` })
+  }
+}
+
+function artifactReferenceStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value]
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string")
+  }
+
+  return []
+}
+
+async function listBundleFiles(directory: string, prefix = ""): Promise<string[]> {
+  const files: string[] = []
+  for (const entry of await readdir(join(directory, prefix), { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      files.push(...await listBundleFiles(directory, path))
+    } else if (entry.isFile()) {
+      files.push(path)
+    }
+  }
+
+  return files.sort()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export interface Runtime {

@@ -1,4 +1,4 @@
-import type { ArtifactBundle, ExecutionResult, RuntimeInfo } from "@chubes4/wp-codebox-core"
+import type { ArtifactBundle, ArtifactBundleVerificationResult, ExecutionResult, RuntimeInfo } from "@chubes4/wp-codebox-core"
 
 interface CliError {
   name: string
@@ -195,6 +195,15 @@ export function printRecipeValidateHumanOutput(output: RecipeValidateOutputLike)
   }
 }
 
+export function printArtifactVerifyHumanOutput(output: ArtifactBundleVerificationResult): void {
+  console.log("WP Codebox artifact bundle verification")
+  console.log(`Bundle: ${output.bundleDirectory}`)
+  console.log(`Valid: ${output.valid ? "yes" : "no"}`)
+  for (const violation of output.violations) {
+    console.log(`- ${violation.code} ${violation.path}: ${violation.message}`)
+  }
+}
+
 export function printBatchHumanOutput(output: BatchOutputLike): void {
   console.log("WP Codebox batch")
   console.log(`Runs: ${output.completed}/${output.total} completed`)
@@ -233,6 +242,7 @@ export function printHelp(): void {
   wp-codebox schema recipe [--json]
   wp-codebox workspace-policy check --workspace-root <path> --writable-root <path> [options]
   wp-codebox recipe validate --recipe <path> [--json]
+  wp-codebox artifacts verify --bundle <dir> [--json]
   wp-codebox validate-blueprint --blueprint <json|file> [options]
   wp-codebox recipe-run --recipe <path> [options]
   wp-codebox boot [--mount <host>:<vfs>] [options]
@@ -240,6 +250,7 @@ export function printHelp(): void {
 
 Options:
   --recipe <path>     Workspace recipe JSON file for recipe-run or recipe validate.
+  --bundle <dir>      Artifact bundle directory for artifacts verify.
   --mount <host:vfs>   Mount a host path into the runtime. Repeatable.
   --command <id>       Command/action id to execute.
   --arg <key=value>    Command argument. Repeatable. Recipe commands include wordpress.run-php, wordpress.phpunit, wordpress.core-phpunit, wordpress.plugin-check, wordpress.wp-cli, wordpress.ability, wordpress.bench, and wordpress.browser-probe.
