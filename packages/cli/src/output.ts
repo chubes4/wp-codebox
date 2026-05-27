@@ -231,6 +231,7 @@ export function printHelp(): void {
   console.log(`Usage:
   wp-codebox commands [--json]
   wp-codebox schema recipe [--json]
+  wp-codebox workspace-policy check --workspace-root <path> --writable-root <path> [options]
   wp-codebox recipe validate --recipe <path> [--json]
   wp-codebox validate-blueprint --blueprint <json|file> [options]
   wp-codebox recipe-run --recipe <path> [options]
@@ -258,6 +259,14 @@ Options:
   --policy <json|file> Runtime policy JSON or path to a JSON file.
   --dry-run            Validate recipe-run and emit a resolved JSON plan without booting Playground or writing temp workspaces.
   --json               Emit machine-readable JSON.
+
+Workspace policy:
+  --workspace-root <dir>
+                       Workspace root to inspect. Defaults to the current directory.
+  --writable-root <path>
+                       Relative path that may be changed. Repeatable.
+  --hidden-path <path> Relative path that must not be changed or exposed. Repeatable.
+  --git                Use git status metadata, including ignored and unmerged entries.
 
 Discovery:
   commands             Print supported runtime and recipe command metadata.

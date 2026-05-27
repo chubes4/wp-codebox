@@ -1,3 +1,5 @@
+export * from "./workspace-policy.js"
+
 export type RuntimeBackendKind = "wordpress-playground" | (string & {})
 
 export const SANDBOX_WORKSPACE_ROOT = "/workspace"

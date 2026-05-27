@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
-import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, createRuntime, validateRuntimePolicy, type ArtifactBundle, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, type ArtifactBundle, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
 import { captureStdout, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
@@ -127,6 +127,14 @@ interface RecipeRunOptions {
 
 interface RecipeValidateOptions {
   recipePath: string
+  json: boolean
+}
+
+interface WorkspacePolicyOptions {
+  workspaceRoot: string
+  writableRoots: string[]
+  hiddenPaths: string[]
+  gitBacked: boolean
   json: boolean
 }
 
@@ -943,6 +951,30 @@ async function main(args: string[]): Promise<number> {
     return output.success ? 0 : 1
   }
 
+  if (command === "workspace-policy") {
+    const subcommand = args.shift()
+    if (subcommand !== "check") {
+      console.error(`Unknown workspace-policy command: ${subcommand ?? ""}`)
+      printHelp()
+      return 1
+    }
+
+    const options = parseWorkspacePolicyOptions(args)
+    const output = await checkWorkspacePolicy({
+      workspaceRoot: options.workspaceRoot,
+      writableRoots: options.writableRoots,
+      hiddenPaths: options.hiddenPaths,
+      gitBacked: options.gitBacked,
+    })
+    if (!options.json) {
+      printWorkspacePolicyHumanOutput(output)
+      return output.passed ? 0 : 1
+    }
+
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
+    return output.passed ? 0 : 1
+  }
+
   if (command === "commands") {
     const json = parseDiscoveryJsonOption(args)
     const output = commandCatalogOutput()
@@ -1059,6 +1091,74 @@ function parseDiscoveryJsonOption(args: string[]): boolean {
   }
 
   return json
+}
+
+function parseWorkspacePolicyOptions(args: string[]): WorkspacePolicyOptions {
+  const options: WorkspacePolicyOptions = {
+    workspaceRoot: process.cwd(),
+    writableRoots: [],
+    hiddenPaths: [],
+    gitBacked: false,
+    json: false,
+  }
+
+  while (args.length > 0) {
+    const arg = args.shift()
+    if (!arg) {
+      continue
+    }
+
+    if (arg === "--json") {
+      options.json = true
+      continue
+    }
+    if (arg === "--git") {
+      options.gitBacked = true
+      continue
+    }
+
+    const value = args.shift()
+    if (!value) {
+      throw new Error(`Missing value for ${arg}`)
+    }
+
+    switch (arg) {
+      case "--workspace":
+      case "--workspace-root":
+        options.workspaceRoot = resolve(value)
+        break
+      case "--writable-root":
+      case "--writable":
+        options.writableRoots.push(value)
+        break
+      case "--hidden-path":
+      case "--hidden":
+        options.hiddenPaths.push(value)
+        break
+      default:
+        throw new Error(`Unknown option: ${arg}`)
+    }
+  }
+
+  if (options.writableRoots.length === 0) {
+    throw new Error("At least one --writable-root is required")
+  }
+
+  return options
+}
+
+function printWorkspacePolicyHumanOutput(output: WorkspacePolicyResult): void {
+  console.log(output.passed ? "Workspace policy passed" : "Workspace policy failed")
+  console.log(`Policy: ${output.policy_sha256}`)
+  if (output.violations.length === 0) {
+    return
+  }
+
+  console.log("Violations:")
+  for (const violation of output.violations) {
+    console.log(`- ${violation.code}: ${violation.path}`)
+    console.log(`  ${violation.message}`)
+  }
 }
 
 function commandCatalogOutput(): CommandCatalogOutput {
