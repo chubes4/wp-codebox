@@ -671,6 +671,8 @@ The WordPress plugin registers parent-site abilities:
 
 These abilities shell out to the local `wp-codebox` CLI, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
 
+`wp-codebox/run-agent-task-batch` runs one isolated sandbox per task sequentially and returns per-task status, artifact id, preview URL, and error fields. Parent orchestrators own any parallel fan-out above this ability.
+
 `wp-codebox/run-agent-task` accepts the stable task input contract below. Existing callers that still send `task` as a string are normalized to the same shape with `goal` populated from `task`. It rejects raw `code` and `code_file` fields so frontend/chat callers cannot pass arbitrary PHP through the product ability path. Operators can still use CLI debug commands directly when they need raw PHP probes.
 
 ```json

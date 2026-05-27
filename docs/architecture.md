@@ -42,10 +42,11 @@ applications. They consume WP Codebox; they do not change the sandbox contract.
   deployment, and package export stay in parent adapters. See
   [`external-apply-adapter-contract.md`](./external-apply-adapter-contract.md).
 - **Batch/fan-out primitive:** `wp-codebox/run-agent-task-batch` launches one
-  isolated sandbox per task with bounded concurrency. Homeboy audit fan-out and
-  similar orchestrators should track their own parent jobs, pass correlation
-  metadata into each sandbox run, and store the returned artifact ids as audit
-  evidence.
+  isolated sandbox per task sequentially and returns per-task artifact ids,
+  preview URLs, statuses, and errors. Homeboy audit fan-out and similar
+  orchestrators should own parent-side parallelism, track their own parent jobs,
+  pass correlation metadata into each sandbox run, and store the returned
+  artifact ids as audit evidence.
 
 ## Ownership Boundaries
 

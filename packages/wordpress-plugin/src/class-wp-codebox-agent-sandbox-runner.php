@@ -198,9 +198,8 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		if ( empty( $task_inputs ) ) {
 			return new WP_Error( 'wp_codebox_tasks_missing', 'tasks must include at least one task.', array( 'status' => 400 ) );
 		}
-		$tasks        = array_map( static fn( array $task_input ): string => (string) $task_input['goal'], $task_inputs );
-		$task_prompts = array_map( array( $this, 'task_input_prompt' ), $task_inputs );
-		$session_id   = $this->sandbox_session_id( $input );
+		$tasks      = array_map( static fn( array $task_input ): string => (string) $task_input['goal'], $task_inputs );
+		$session_id = $this->sandbox_session_id( $input );
 
 		$paths = $this->resolve_component_paths( $input );
 		if ( is_wp_error( $paths ) ) {
@@ -218,63 +217,60 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			return new WP_Error( 'wp_codebox_bin_invalid', 'wp_codebox_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
 		}
 
-		$concurrency = max( 1, (int) ( $input['concurrency'] ?? 2 ) );
-		$recipe_file = $this->write_agent_recipe( $paths, $input, $task_prompts, $wp_version );
-		if ( is_wp_error( $recipe_file ) ) {
-			return $recipe_file;
-		}
+		$runs = array();
+		foreach ( $task_inputs as $index => $task_input ) {
+			$task_input_request = array_merge( $input, $task_input );
+			unset( $task_input_request['tasks'], $task_input_request['task'], $task_input_request['concurrency'], $task_input_request['session_id'] );
 
-		$command = sprintf(
-			'%s recipe-run --recipe %s --artifacts %s --json',
-			$this->command_prefix( $bin ),
-			escapeshellarg( $recipe_file ),
-			escapeshellarg( $artifacts )
-		);
-		$command .= $this->preview_hold_arg( $input );
+			if ( ! empty( $input['sandbox_session_id'] ) ) {
+				$task_input_request['sandbox_session_id'] = $session_id . ':' . ( $index + 1 );
+			}
 
-		$result    = $this->run_command( $command );
-		@unlink( $recipe_file );
-		$exit_code = (int) ( $result['exit_code'] ?? 1 );
-		$output    = (string) ( $result['output'] ?? '' );
-		$decoded   = $this->decode_json_output( $output );
+			$task_result = $this->run( $task_input_request );
+			if ( is_wp_error( $task_result ) ) {
+				$runs[] = array(
+					'index'      => $index,
+					'task'       => (string) $task_input['goal'],
+					'task_input' => $task_input,
+					'success'    => false,
+					'status'     => 'failed',
+					'error'      => $this->error_payload( $task_result ),
+				);
+				continue;
+			}
 
-		if ( is_wp_error( $decoded ) ) {
-			return new WP_Error(
-				'wp_codebox_json_invalid',
-				'WP Codebox did not return valid JSON: ' . $decoded->get_error_message(),
-				array(
-					'status'    => 500,
-					'exit_code' => $exit_code,
-					'output'    => $this->bound_output( $output ),
-				)
+			$runs[] = array(
+				'index'       => $index,
+				'task'        => (string) $task_input['goal'],
+				'task_input'  => $task_input,
+				'success'     => true,
+				'status'      => 'completed',
+				'exit_code'   => (int) ( $task_result['exit_code'] ?? 0 ),
+				'session'     => $task_result['session'] ?? array(),
+				'artifact_id' => (string) ( $task_result['session']['artifacts']['bundle_id'] ?? '' ),
+				'preview_url' => (string) ( $task_result['session']['artifacts']['preview_url'] ?? '' ),
+				'artifacts'   => $task_result['session']['artifacts'] ?? array(),
+				'run'         => $task_result['run'] ?? array(),
 			);
 		}
 
-		if ( 0 !== $exit_code ) {
-			return new WP_Error(
-				'wp_codebox_batch_failed',
-				'WP Codebox agent sandbox batch failed.',
-				array(
-					'status'    => 500,
-					'exit_code' => $exit_code,
-					'output'    => $this->bound_output( $output ),
-					'run'       => $decoded,
-				)
-			);
-		}
+		$completed = count( array_filter( $runs, static fn( array $run ): bool => true === ( $run['success'] ?? false ) ) );
+		$failed    = count( $runs ) - $completed;
 
 		return array(
-			'success'     => true,
+			'success'     => 0 === $failed,
 			'schema'      => self::BATCH_SCHEMA,
-			'session'     => $this->sandbox_session( $session_id, 'completed', $input, $decoded, $artifacts ),
+			'session'     => $this->sandbox_session( $session_id, 'completed', $input, array(), $artifacts ),
 			'tasks'       => $tasks,
 			'task_inputs' => $task_inputs,
-			'concurrency' => $concurrency,
+			'execution'   => 'sequential-isolated-sandboxes',
+			'total'       => count( $runs ),
+			'completed'   => $completed,
+			'failed'      => $failed,
 			'wp'          => $wp_version,
 			'paths'       => $paths,
 			'artifacts'   => $artifacts,
-			'exit_code'   => $exit_code,
-			'run'         => $decoded,
+			'runs'        => $runs,
 		);
 	}
 
@@ -1091,6 +1087,17 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		}
 
 		return $session;
+	}
+
+	private function error_payload( WP_Error $error ): array {
+		return array_filter(
+			array(
+				'code'    => $error->get_error_code(),
+				'message' => $error->get_error_message(),
+				'data'    => $error->get_error_data(),
+			),
+			static fn( mixed $value ): bool => null !== $value && array() !== $value && '' !== $value
+		);
 	}
 
 	/** @return array<string,mixed>|WP_Error */

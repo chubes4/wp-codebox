@@ -107,6 +107,8 @@ $batch_ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-age
 $assert( 'run-agent-task-batch ability registered', is_array( $batch_ability ) );
 $assert( 'batch ability is REST visible', true === ( $batch_ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'batch ability requires tasks', array( 'tasks' ) === ( $batch_ability['input_schema']['required'] ?? array() ) );
+$assert( 'batch ability contract does not expose unimplemented concurrency', ! isset( $batch_ability['input_schema']['properties']['concurrency'] ) && ! isset( $batch_ability['output_schema']['properties']['concurrency'] ) );
+$assert( 'batch ability exposes per-task run outputs', isset( $batch_ability['output_schema']['properties']['runs']['items']['properties']['artifact_id'] ) && isset( $batch_ability['output_schema']['properties']['runs']['items']['properties']['preview_url'] ) && isset( $batch_ability['output_schema']['properties']['runs']['items']['properties']['error'] ) );
 
 $artifact_abilities = array(
 	'wp-codebox/list-artifacts',
@@ -133,16 +135,23 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_default_provider'] = 'openai';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_model'] = 'gpt-5.5';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI_API_KEY' );
 
-$captured_command = '';
-$captured_recipe  = '';
+$captured_command  = '';
+$captured_commands = array();
+$captured_recipe   = '';
+$captured_recipes  = array();
+$command_count     = 0;
 $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 	array(
 		'shell_available' => fn() => true,
-		'command_runner'  => function ( string $command ) use ( &$captured_command, &$captured_recipe ): array {
-			$captured_command = $command;
+		'command_runner'  => function ( string $command ) use ( &$captured_command, &$captured_commands, &$captured_recipe, &$captured_recipes, &$command_count ): array {
+			++$command_count;
+			$captured_command    = $command;
+			$captured_commands[] = $command;
 			if ( preg_match( "/--recipe '([^']+)'/", $command, $matches ) && is_readable( $matches[1] ) ) {
-				$captured_recipe = (string) file_get_contents( $matches[1] );
+				$captured_recipe   = (string) file_get_contents( $matches[1] );
+				$captured_recipes[] = $captured_recipe;
 			}
+			$artifact_id = 1 === $command_count ? 'artifact-bundle-sha256-fixture' : 'artifact-bundle-sha256-fixture-' . $command_count;
 			return array(
 				'exit_code' => 0,
 				'output'    => json_encode(
@@ -150,8 +159,8 @@ $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 						'success'   => true,
 						'runtime'   => array( 'backend' => 'wordpress-playground' ),
 						'artifacts' => array(
-							'id'      => 'artifact-bundle-sha256-fixture',
-							'preview' => array( 'url' => 'http://127.0.0.1:12345' ),
+							'id'      => $artifact_id,
+							'preview' => array( 'url' => 'http://127.0.0.1:' . ( 12344 + $command_count ) ),
 						),
 					)
 				),
@@ -421,7 +430,7 @@ unset( $GLOBALS['wp_codebox_filters']['wp_codebox_allowed_sandbox_tools'] );
 $batch_result = $runner->run_batch(
 	array(
 		'tasks'          => array( 'Fix issue one.', 'Fix issue two.' ),
-		'concurrency'    => 2,
+		'sandbox_session_id' => 'parent-batch-789',
 		'artifacts_path' => $root . '/artifacts',
 	)
 );
@@ -429,13 +438,55 @@ $batch_result = $runner->run_batch(
 $assert( 'batch runner succeeds with filter-provided component paths', ! is_wp_error( $batch_result ) && true === ( $batch_result['success'] ?? false ) );
 $assert( 'batch runner schema is stable', ! is_wp_error( $batch_result ) && 'wp-codebox/agent-task-batch/v1' === ( $batch_result['schema'] ?? '' ) );
 $assert( 'batch runner returns normalized task inputs', ! is_wp_error( $batch_result ) && 2 === count( $batch_result['task_inputs'] ?? array() ) && 'Fix issue one.' === ( $batch_result['task_inputs'][0]['goal'] ?? '' ) );
-$assert( 'batch runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
-$assert( 'batch runner emits repeated agent steps', 2 === substr_count( $captured_recipe, 'wp-codebox.agent-sandbox-run' ) );
-$assert( 'batch runner preserves requested concurrency', 2 === ( $batch_result['concurrency'] ?? 0 ) );
-$assert( 'batch runner recipe passes default provider', str_contains( $captured_recipe, 'openai' ) );
-$assert( 'batch runner recipe passes default model', str_contains( $captured_recipe, 'gpt-5.5' ) );
-$assert( 'batch runner recipe passes provider plugin path', str_contains( $captured_recipe, 'ai-provider-test' ) );
-$assert( 'batch runner recipe passes secret env name only', str_contains( $captured_recipe, 'OPENAI_API_KEY' ) );
+$batch_recipes = array_slice( $captured_recipes, -2 );
+$assert( 'batch runner invokes recipe-run once per task', 2 === count( $batch_result['runs'] ?? array() ) && 2 === count( $batch_recipes ) && str_contains( $captured_commands[ count( $captured_commands ) - 1 ] ?? '', 'recipe-run' ) );
+$assert( 'batch runner emits one agent step per isolated recipe', 1 === substr_count( $batch_recipes[0] ?? '', 'wp-codebox.agent-sandbox-run' ) && 1 === substr_count( $batch_recipes[1] ?? '', 'wp-codebox.agent-sandbox-run' ) );
+$assert( 'batch runner returns sequential isolation contract', 'sequential-isolated-sandboxes' === ( $batch_result['execution'] ?? '' ) && ! array_key_exists( 'concurrency', $batch_result ) );
+$assert( 'batch runner returns per-task artifact refs', ! is_wp_error( $batch_result ) && '' !== ( $batch_result['runs'][0]['artifact_id'] ?? '' ) && '' !== ( $batch_result['runs'][1]['artifact_id'] ?? '' ) && ( $batch_result['runs'][0]['artifact_id'] ?? '' ) !== ( $batch_result['runs'][1]['artifact_id'] ?? '' ) );
+$assert( 'batch runner returns per-task preview URLs', ! is_wp_error( $batch_result ) && str_starts_with( (string) ( $batch_result['runs'][0]['preview_url'] ?? '' ), 'http://127.0.0.1:' ) && str_starts_with( (string) ( $batch_result['runs'][1]['preview_url'] ?? '' ), 'http://127.0.0.1:' ) );
+$assert( 'batch runner assigns per-task sandbox session ids', ! is_wp_error( $batch_result ) && 'parent-batch-789:1' === ( $batch_result['runs'][0]['session']['id'] ?? '' ) && 'parent-batch-789:2' === ( $batch_result['runs'][1]['session']['id'] ?? '' ) );
+$assert( 'batch runner reports per-task counts', ! is_wp_error( $batch_result ) && 2 === ( $batch_result['total'] ?? 0 ) && 2 === ( $batch_result['completed'] ?? 0 ) && 0 === ( $batch_result['failed'] ?? -1 ) );
+$assert( 'batch runner recipe passes default provider', str_contains( $batch_recipes[0] ?? '', 'openai' ) && str_contains( $batch_recipes[1] ?? '', 'openai' ) );
+$assert( 'batch runner recipe passes default model', str_contains( $batch_recipes[0] ?? '', 'gpt-5.5' ) && str_contains( $batch_recipes[1] ?? '', 'gpt-5.5' ) );
+$assert( 'batch runner recipe passes provider plugin path', str_contains( $batch_recipes[0] ?? '', 'ai-provider-test' ) && str_contains( $batch_recipes[1] ?? '', 'ai-provider-test' ) );
+$assert( 'batch runner recipe passes secret env name only', str_contains( $batch_recipes[0] ?? '', 'OPENAI_API_KEY' ) && str_contains( $batch_recipes[1] ?? '', 'OPENAI_API_KEY' ) );
+
+$failing_batch_count  = 0;
+$failing_batch_runner = new WP_Codebox_Agent_Sandbox_Runner(
+	array(
+		'shell_available' => fn() => true,
+		'command_runner'  => function () use ( &$failing_batch_count ): array {
+			++$failing_batch_count;
+			if ( 2 === $failing_batch_count ) {
+				return array(
+					'exit_code' => 1,
+					'output'    => json_encode( array( 'success' => false, 'error' => 'fixture failure' ) ),
+				);
+			}
+
+			return array(
+				'exit_code' => 0,
+				'output'    => json_encode(
+					array(
+						'success'   => true,
+						'artifacts' => array(
+							'id'      => 'artifact-bundle-sha256-partial-success',
+							'preview' => array( 'url' => 'http://127.0.0.1:22345' ),
+						),
+					)
+				),
+			);
+		},
+	)
+);
+$partial_batch = $failing_batch_runner->run_batch(
+	array(
+		'tasks'          => array( 'Succeed once.', 'Fail once.' ),
+		'artifacts_path' => $root . '/artifacts',
+	)
+);
+$assert( 'batch runner continues after per-task failure', ! is_wp_error( $partial_batch ) && false === ( $partial_batch['success'] ?? true ) && 1 === ( $partial_batch['completed'] ?? 0 ) && 1 === ( $partial_batch['failed'] ?? 0 ) );
+$assert( 'batch runner returns per-task errors', ! is_wp_error( $partial_batch ) && 'failed' === ( $partial_batch['runs'][1]['status'] ?? '' ) && 'wp_codebox_run_failed' === ( $partial_batch['runs'][1]['error']['code'] ?? '' ) );
 
 $pending_action_handlers_filter     = $GLOBALS['wp_codebox_filters']['datamachine_pending_action_handlers'] ?? null;
 $GLOBALS['wp_codebox_is_multisite'] = true;

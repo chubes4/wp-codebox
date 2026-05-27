@@ -46,11 +46,12 @@ agent.
 }
 ```
 
-The batch ability runs `wp-codebox agent-sandbox-batch`, accepts a list of task
-descriptions or structured task inputs, and launches one isolated sandbox per
-task with bounded concurrency. This is the parent-site primitive for fan-out
-workflows such as assigning several GitHub issues to separate sandbox coding
-agents.
+The batch ability accepts a list of task descriptions or structured task inputs
+and launches one isolated sandbox per task sequentially. Each task returns its
+own status, artifact id, preview URL, and error payload when the task fails. This
+is the parent-site primitive for fan-out workflows such as assigning several
+GitHub issues to separate sandbox coding agents; parent orchestrators own any
+parallelism above WP Codebox.
 
 Parent control planes that need durable job/session state should own that state
 outside WP Codebox and pass a caller-owned `sandbox_session_id`. WP Codebox
