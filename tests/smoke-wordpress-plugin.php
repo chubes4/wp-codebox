@@ -496,11 +496,20 @@ $changed_files_json = json_encode(
 				'relativePath' => 'generated.txt',
 				'patchPath'    => 'files/diffs/mount-0.patch',
 			),
+			array(
+				'path'         => '/wordpress/wp-content/plugins/example/unapproved.txt',
+				'status'       => 'added',
+				'mountIndex'   => 0,
+				'mountTarget'  => '/wordpress/wp-content/plugins/example',
+				'relativePath' => 'unapproved.txt',
+				'patchPath'    => 'files/diffs/mount-0.patch',
+			),
 		),
 	),
 	JSON_PRETTY_PRINT
 ) . "\n";
-$patch_diff          = "diff --git a/generated.txt b/generated.txt\n+cooked\n";
+$approved_patch_diff = "diff --git a/generated.txt b/generated.txt\n+cooked\n";
+$patch_diff          = $approved_patch_diff . "diff --git a/unapproved.txt b/unapproved.txt\n+unsafe\n";
 $content_digest      = hash( 'sha256', "wp-codebox/artifact-content/v1\nfiles/changed-files.json\n" . $changed_files_json . "\nfiles/patch.diff\n" . $patch_diff );
 $artifact_id         = 'artifact-bundle-sha256-' . $content_digest;
 file_put_contents(
@@ -622,6 +631,7 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function 
 		'patch_sha256'            => $payload['patch_sha256'],
 		'artifact_content_digest' => $payload['artifact_content_digest'],
 		'patch_contains'          => str_contains( $payload['patch'], 'cooked' ),
+		'patch_contains_unsafe'   => str_contains( $payload['patch'], 'unsafe' ),
 		'patch'                   => $payload['patch'],
 		'access_token'            => 'secret-token-value',
 		'pr_url'                  => 'https://github.com/chubes4/wp-codebox/pull/999',
@@ -635,7 +645,7 @@ $applied = $artifacts->apply_approved(
 		'approver'        => 'site-user:1',
 	)
 );
-$assert( 'approved artifact apply delegates exact patch', ! is_wp_error( $applied ) && true === ( $applied['result']['patch_contains'] ?? false ) && hash( 'sha256', $patch_diff ) === ( $applied['patch_sha256'] ?? '' ) && $content_digest === ( $applied['content_digest'] ?? '' ) );
+$assert( 'approved artifact apply delegates filtered patch', ! is_wp_error( $applied ) && true === ( $applied['result']['patch_contains'] ?? false ) && false === ( $applied['result']['patch_contains_unsafe'] ?? true ) && hash( 'sha256', $approved_patch_diff ) === ( $applied['patch_sha256'] ?? '' ) && $content_digest === ( $applied['content_digest'] ?? '' ) );
 
 $captured_stage_args = array();
 $GLOBALS['wp_codebox_filters']['wp_codebox_stage_pending_apply_artifact'] = function ( mixed $value, array $stage_args ) use ( &$captured_stage_args ): array {
@@ -685,7 +695,7 @@ $success_audit   = isset( $audit_lines[0] ) ? json_decode( $audit_lines[0], true
 $success_encoded = isset( $audit_lines[0] ) ? $audit_lines[0] : '';
 $assert( 'approved artifact apply writes success audit record', is_array( $success_audit ) && 'wp-codebox/apply-audit/v1' === ( $success_audit['schema'] ?? '' ) && 'success' === ( $success_audit['status'] ?? '' ) );
 $assert( 'success audit records reviewed principals and files', 'chat:user-7' === ( $success_audit['requester'] ?? '' ) && 'site-user:1' === ( $success_audit['approver'] ?? '' ) && array( '/wordpress/wp-content/plugins/example/generated.txt' ) === ( $success_audit['approved_files'] ?? array() ) );
-$assert( 'success audit records digest and adapter metadata', $artifact_id === ( $success_audit['artifact_id'] ?? '' ) && $content_digest === ( $success_audit['content_digest'] ?? '' ) && 'test-adapter' === ( $success_audit['adapter'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/999' === ( $success_audit['result']['pr_url'] ?? '' ) );
+$assert( 'success audit records applied patch digest and adapter metadata', $artifact_id === ( $success_audit['artifact_id'] ?? '' ) && $content_digest === ( $success_audit['content_digest'] ?? '' ) && hash( 'sha256', $approved_patch_diff ) === ( $success_audit['patch_sha256'] ?? '' ) && 'test-adapter' === ( $success_audit['adapter'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/999' === ( $success_audit['result']['pr_url'] ?? '' ) );
 $assert( 'success audit excludes raw patch body and secrets', ! str_contains( $success_encoded, 'diff --git' ) && ! str_contains( $success_encoded, 'secret-token-value' ) && '[redacted]' === ( $success_audit['result']['patch'] ?? '' ) && '[redacted]' === ( $success_audit['result']['access_token'] ?? '' ) );
 
 $GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function (): WP_Error {
