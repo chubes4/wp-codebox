@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
-import { createRuntime } from "@chubes4/wp-codebox-core"
+import { createRuntime, verifyArtifactBundle } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
 const execFileAsync = promisify(execFile)
@@ -39,6 +39,8 @@ try {
   assert.equal(output.runtime.previewUrl, "https://preview.example.test/codebox/")
 
   const artifacts = output.artifacts
+  const verification = await verifyArtifactBundle(artifacts.directory)
+  assert.equal(verification.valid, true, JSON.stringify(verification.violations, null, 2))
   assert.ok(artifacts.changedFilesPath, "artifact bundle should expose changedFilesPath")
   assert.ok(artifacts.patchPath, "artifact bundle should expose patchPath")
   assert.ok(artifacts.testResultsPath, "artifact bundle should expose testResultsPath")
