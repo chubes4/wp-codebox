@@ -722,6 +722,7 @@ export interface ArtifactBundle {
   patchPath: string
   testResultsPath: string
   reviewPath: string
+  runAttestationPath?: string
   runtimeEpisodeTracePath?: string
   runtimeEpisodeEventsPath?: string
   artifactVerificationPath?: string

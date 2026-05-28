@@ -83,12 +83,16 @@ try {
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/patch.diff" && file.kind === "patch"))
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/test-results.json" && file.kind === "test-results"))
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/review.json" && file.kind === "review"))
+  assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-evidence/run-attestation.json" && file.kind === "run-attestation"))
+  const runtimeEvidence = metadata.artifacts.runtimeEvidence
+  assert.match(runtimeEvidence["run-attestation"].sha256, /^[a-f0-9]{64}$/)
   assert.deepEqual(metadata.artifacts, {
     changedFiles: "files/changed-files.json",
     patch: "files/patch.diff",
     testResults: "files/test-results.json",
     review: "files/review.json",
     mountDiffs: "files/diffs.json",
+    runtimeEvidence,
   })
   assert.equal(metadata.provenance.runtime.backend, "wordpress-playground")
   assert.equal(metadata.provenance.runtime.version, "0.0.0")

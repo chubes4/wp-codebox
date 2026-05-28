@@ -225,6 +225,23 @@ Expected shape:
 
 WP Codebox boots Playground lazily on the first command, captures artifacts after execution, and disposes the runtime when the run completes.
 
+## Runtime Evidence
+
+Recipe runs write runtime evidence under `files/runtime-evidence/`. Every recipe
+run includes `run-attestation.json`, a generic attestation with the WP Codebox
+package identity, git commit when available, Playground backend package/version,
+WordPress runtime version, command-policy hash, policy enforcement states,
+references to workspace-policy and artifact-verifier results when configured,
+and redacted secret-envelope metadata.
+
+The attestation treats runtime command, network, filesystem, secrets, and
+approval policies as sealed because WP Codebox enforces them while executing the
+run. Workspace policy and artifact verification are sealed only when their
+recipe options are enabled with `strict: true`; when enabled without strict mode,
+their result artifacts are recorded as advisory/declarative evidence. Secret
+values are never written to the attestation; it records only names, counts,
+availability, and the redaction mode.
+
 For interactive review, pass `--preview-hold <duration>` to keep the live Playground server available briefly after artifact capture. The command emits `artifacts.preview.url` and `files/review.json` includes a matching top-level `preview` object with lifecycle and expiry details.
 
 ```bash

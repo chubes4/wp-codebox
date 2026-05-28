@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
+import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
@@ -133,6 +134,9 @@ interface RecipeArtifactEvidenceFile {
 }
 
 interface RecipeArtifactEvidenceResult {
+  runAttestation?: RecipeRunAttestation & {
+    artifact: RecipeArtifactEvidenceFile
+  }
   artifactVerification?: ArtifactBundleVerificationResult & {
     artifact: RecipeArtifactEvidenceFile
     strict: boolean
@@ -141,6 +145,80 @@ interface RecipeArtifactEvidenceResult {
     artifact: RecipeArtifactEvidenceFile
     strict: boolean
   }
+}
+
+interface RecipeRunAttestation {
+  schema: "wp-codebox/run-attestation/v1"
+  createdAt: string
+  package: {
+    name: string
+    version?: string
+    commit?: string
+  }
+  backend: {
+    kind: string
+    package: {
+      name: string
+      version?: string
+    }
+    engine?: {
+      name: string
+      version?: string
+    }
+  }
+  runtime: {
+    kind: string
+    name?: string
+    version?: string
+    immutableRef?: string
+  }
+  policy: {
+    command: {
+      sha256: string
+      allowedCommands: string[]
+      enforcement: "enforced"
+    }
+    network: RunAttestationPolicyField
+    filesystem: RunAttestationPolicyField
+    secrets: RunAttestationPolicyField
+    approvals: RunAttestationPolicyField
+    workspace: RunAttestationEvidencePolicy
+    artifactVerifier: RunAttestationEvidencePolicy
+  }
+  secretEnvelope: {
+    schema: "wp-codebox/redacted-secret-envelope/v1"
+    provided: boolean
+    count: number
+    secrets: Array<{ name: string; status: "available"; source: "recipe-secret-env" }>
+    redaction: "names-only"
+  }
+  evidenceRefs: {
+    workspacePolicyResult?: RunAttestationEvidenceRef
+    artifactVerifierResult?: RunAttestationEvidenceRef
+  }
+  sealed: {
+    enforced: string[]
+    declarative: string[]
+  }
+}
+
+interface RunAttestationPolicyField {
+  value: RuntimePolicy[keyof RuntimePolicy]
+  enforcement: "enforced"
+}
+
+interface RunAttestationEvidencePolicy {
+  enabled: boolean
+  strict: boolean
+  enforcement: "enforced" | "declarative" | "not-configured"
+  sha256?: string
+  resultRef?: RunAttestationEvidenceRef
+}
+
+interface RunAttestationEvidenceRef {
+  path: string
+  sha256: string
+  kind: string
 }
 
 interface RecipeWorkspacePolicyArtifactResult {
@@ -473,6 +551,8 @@ const WP_CODEBOX_RUNTIME_VERSION = "0.0.0"
 const DEFAULT_WORDPRESS_VERSION = "7.0"
 const ALLOW_NETWORK_DOWNLOADS_ENV = "WP_CODEBOX_ALLOW_NETWORK_DOWNLOADS"
 const execFileAsync = promisify(execFile)
+const moduleDirectory = dirname(fileURLToPath(import.meta.url))
+const workspaceRoot = resolve(moduleDirectory, "..", "..", "..")
 const commandCatalog: CommandMetadata[] = [
   {
     id: "inspect-mounted-inputs",
@@ -1437,6 +1517,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
 
   const policy = recipePolicy(recipe)
   const secretEnv = resolveSecretEnv(recipe.inputs?.secretEnv ?? [])
+  const effectivePolicy = Object.keys(secretEnv).length > 0 ? { ...policy, secrets: "connector-scoped" as const } : policy
   let workspaceMounts: PreparedWorkspaceMount[] = []
   let extraPlugins: PreparedExtraPlugin[] = []
   let stagedFiles: PreparedStagedFile[] = []
@@ -1458,7 +1539,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
           version: recipe.runtime?.wp ?? DEFAULT_WORDPRESS_VERSION,
           blueprint: recipe.runtime?.blueprint ?? { steps: [] },
         },
-        policy: Object.keys(secretEnv).length > 0 ? { ...policy, secrets: "connector-scoped" } : policy,
+        policy: effectivePolicy,
         secretEnv,
         artifactsDirectory: options.artifactsDirectory ?? recipe.artifacts?.directory,
         metadata: {
@@ -1528,7 +1609,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
     await runtime.observe({ type: "runtime-info" })
     await runtime.observe({ type: "mounts" })
     artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true, previewHoldSeconds: options.previewHoldSeconds })
-    const evidence = await finalizeRecipeArtifactEvidence(artifacts, recipe, workspaceMounts, stagedFiles)
+    const evidence = await finalizeRecipeArtifactEvidence(artifacts, recipe, workspaceMounts, stagedFiles, effectivePolicy, secretEnv)
     const strictFailure = recipeArtifactEvidenceFailure(evidence)
     const runtimeInfo = options.previewHoldSeconds ? await runtime.info() : undefined
     await releaseRuntime(runtime, options.previewHoldSeconds, () => cleanupRecipePreparedSources(workspaceMounts, extraPlugins, stagedFiles))
@@ -1599,14 +1680,12 @@ async function finalizeRecipeArtifactEvidence(
   recipe: WorkspaceRecipe,
   workspaceMounts: PreparedWorkspaceMount[],
   stagedFiles: PreparedStagedFile[],
+  policy: RuntimePolicy,
+  secretEnv: Record<string, string>,
 ): Promise<RecipeArtifactEvidenceResult> {
   const result: RecipeArtifactEvidenceResult = {}
   const verifier = normalizeArtifactToggle(recipe.artifacts?.verify)
   const workspacePolicy = normalizeWorkspacePolicyArtifact(recipe.artifacts?.workspacePolicy)
-
-  if (!verifier.enabled && !workspacePolicy.enabled) {
-    return result
-  }
 
   const evidenceDirectory = join(dirname(artifacts.reviewPath), "runtime-evidence")
   await mkdir(evidenceDirectory, { recursive: true })
@@ -1648,11 +1727,199 @@ async function finalizeRecipeArtifactEvidence(
       artifact: verificationFile,
       strict: verifier.strict,
     }
-    return result
+  }
+
+  const attestationPath = join(evidenceDirectory, "run-attestation.json")
+  const attestation = await buildRecipeRunAttestation({
+    artifacts,
+    recipe,
+    policy,
+    secretEnv,
+    workspacePolicy,
+    verifier,
+    workspacePolicyFile: result.workspacePolicy?.artifact,
+    artifactVerificationFile: result.artifactVerification?.artifact,
+  })
+  const attestationFile = await writeRecipeEvidenceJson(artifacts.directory, attestationPath, attestation, "run-attestation")
+  artifacts.runAttestationPath = attestationPath
+  evidenceFiles.push(attestationFile)
+  result.runAttestation = {
+    ...attestation,
+    artifact: attestationFile,
   }
 
   await updateRecipeArtifactEvidenceReferences(artifacts, evidenceFiles)
   return result
+}
+
+async function buildRecipeRunAttestation(args: {
+  artifacts: ArtifactBundle
+  recipe: WorkspaceRecipe
+  policy: RuntimePolicy
+  secretEnv: Record<string, string>
+  workspacePolicy: { enabled: boolean; strict: boolean }
+  verifier: { enabled: boolean; strict: boolean }
+  workspacePolicyFile?: RecipeArtifactEvidenceFile
+  artifactVerificationFile?: RecipeArtifactEvidenceFile
+}): Promise<RecipeRunAttestation> {
+  const manifest = JSON.parse(await readFile(args.artifacts.manifestPath, "utf8")) as { runtime?: RuntimeInfo }
+  const runtime = manifest.runtime ?? {
+    id: "unknown",
+    backend: args.recipe.runtime?.backend ?? "wordpress-playground",
+    environment: {
+      kind: "wordpress",
+      name: args.recipe.runtime?.name ?? "wp-codebox-recipe",
+      version: args.recipe.runtime?.wp ?? DEFAULT_WORDPRESS_VERSION,
+    },
+    createdAt: args.artifacts.createdAt,
+    status: "destroyed" as const,
+  }
+  const rootPackage = await readPackageJson(resolve(workspaceRoot, "package.json"))
+  const backendPackage = await readPackageJson(resolve(moduleDirectory, "..", "..", "runtime-playground", "package.json"))
+  const commit = await readGitCommit(workspaceRoot)
+  const workspacePolicyRef = args.workspacePolicyFile ? evidenceRef(args.workspacePolicyFile) : undefined
+  const artifactVerificationRef = args.artifactVerificationFile ? evidenceRef(args.artifactVerificationFile) : undefined
+  const workspacePolicyEnforcement = evidencePolicyEnforcement(args.workspacePolicy.enabled, args.workspacePolicy.strict)
+  const verifierEnforcement = evidencePolicyEnforcement(args.verifier.enabled, args.verifier.strict)
+
+  return {
+    schema: "wp-codebox/run-attestation/v1",
+    createdAt: new Date().toISOString(),
+    package: stripUndefined({
+      name: "wp-codebox",
+      version: typeof rootPackage.version === "string" ? rootPackage.version : undefined,
+      commit,
+    }),
+    backend: stripUndefined({
+      kind: runtime.backend,
+      package: stripUndefined({
+        name: typeof backendPackage.name === "string" ? backendPackage.name : "@chubes4/wp-codebox-playground",
+        version: typeof backendPackage.version === "string" ? backendPackage.version : undefined,
+      }),
+      engine: stripUndefined({
+        name: "@wp-playground/cli",
+        version: packageDependencyVersion(backendPackage, "@wp-playground/cli"),
+      }),
+    }),
+    runtime: stripUndefined({
+      kind: runtime.environment.kind,
+      name: runtime.environment.name,
+      version: runtime.environment.version,
+      immutableRef: runtime.environment.version,
+    }),
+    policy: {
+      command: {
+        sha256: sha256Json(args.policy.commands),
+        allowedCommands: args.policy.commands,
+        enforcement: "enforced",
+      },
+      network: enforcedPolicyField(args.policy.network),
+      filesystem: enforcedPolicyField(args.policy.filesystem),
+      secrets: enforcedPolicyField(args.policy.secrets),
+      approvals: enforcedPolicyField(args.policy.approvals),
+      workspace: stripUndefined({
+        enabled: args.workspacePolicy.enabled,
+        strict: args.workspacePolicy.strict,
+        enforcement: workspacePolicyEnforcement,
+        sha256: args.workspacePolicyFile?.sha256,
+        resultRef: workspacePolicyRef,
+      }),
+      artifactVerifier: stripUndefined({
+        enabled: args.verifier.enabled,
+        strict: args.verifier.strict,
+        enforcement: verifierEnforcement,
+        sha256: args.artifactVerificationFile?.sha256,
+        resultRef: artifactVerificationRef,
+      }),
+    },
+    secretEnvelope: {
+      schema: "wp-codebox/redacted-secret-envelope/v1",
+      provided: Object.keys(args.secretEnv).length > 0,
+      count: Object.keys(args.secretEnv).length,
+      secrets: Object.keys(args.secretEnv).sort().map((name) => ({ name, status: "available", source: "recipe-secret-env" })),
+      redaction: "names-only",
+    },
+    evidenceRefs: stripUndefined({
+      workspacePolicyResult: workspacePolicyRef,
+      artifactVerifierResult: artifactVerificationRef,
+    }),
+    sealed: {
+      enforced: [
+        "command-policy",
+        "network-policy",
+        "filesystem-policy",
+        "secret-policy",
+        "approval-policy",
+        ...(args.workspacePolicy.strict ? ["workspace-policy"] : []),
+        ...(args.verifier.strict ? ["artifact-verifier"] : []),
+      ],
+      declarative: [
+        ...(!args.workspacePolicy.enabled || args.workspacePolicy.strict ? [] : ["workspace-policy"]),
+        ...(!args.verifier.enabled || args.verifier.strict ? [] : ["artifact-verifier"]),
+      ],
+    },
+  }
+}
+
+function enforcedPolicyField(value: RuntimePolicy[keyof RuntimePolicy]): RunAttestationPolicyField {
+  return { value, enforcement: "enforced" }
+}
+
+function evidencePolicyEnforcement(enabled: boolean, strict: boolean): RunAttestationEvidencePolicy["enforcement"] {
+  if (!enabled) {
+    return "not-configured"
+  }
+  return strict ? "enforced" : "declarative"
+}
+
+function evidenceRef(file: RecipeArtifactEvidenceFile): RunAttestationEvidenceRef {
+  return {
+    path: file.path,
+    sha256: file.sha256,
+    kind: file.kind,
+  }
+}
+
+async function readPackageJson(path: string): Promise<Record<string, unknown>> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+function packageDependencyVersion(packageJson: Record<string, unknown>, name: string): string | undefined {
+  for (const key of ["dependencies", "devDependencies", "peerDependencies"] as const) {
+    const dependencies = packageJson[key]
+    if (isRecord(dependencies) && typeof dependencies[name] === "string") {
+      return dependencies[name]
+    }
+  }
+  return undefined
+}
+
+async function readGitCommit(cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })
+    const commit = stdout.trim()
+    return /^[a-f0-9]{40}$/i.test(commit) ? commit : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function sha256Json(value: unknown): string {
+  return createHash("sha256").update(`${stableJson(value)}\n`).digest("hex")
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
 }
 
 function recipeArtifactEvidenceFailure(evidence: RecipeArtifactEvidenceResult): RunOutput["error"] | undefined {
