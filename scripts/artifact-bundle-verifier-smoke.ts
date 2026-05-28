@@ -50,6 +50,10 @@ try {
   await writeJson(join(reviewMismatch, "files/review.json"), review)
   assertViolation(await verifyArtifactBundle(reviewMismatch), "review-evidence-mismatch")
 
+  const invalidTrace = await copyBundle(validBundle, join(workspace, "invalid-runtime-episode-trace"))
+  await writeJson(join(invalidTrace, "files/runtime-episode-trace.json"), { schema: "wrong" })
+  assertViolation(await verifyArtifactBundle(invalidTrace), "malformed-reference")
+
   console.log("Artifact bundle verifier smoke passed")
 } finally {
   await rm(workspace, { recursive: true, force: true })
@@ -65,6 +69,8 @@ async function writeValidBundle(directory: string): Promise<void> {
   await writeFile(join(directory, "files/test-results.json"), "{}\n")
 
   const digest = await calculateArtifactContentDigest(directory, ["files/changed-files.json", "files/patch.diff"])
+  await writeJson(join(directory, "files/runtime-episode-trace.json"), runtimeEpisodeTraceFixture(digest))
+  await writeFile(join(directory, "files/runtime-episode.jsonl"), `${JSON.stringify({ type: "episode.artifacts", id: `artifact-bundle-sha256-${digest}` })}\n`)
   await writeJson(join(directory, "files/review.json"), reviewFixture(digest))
   await writeJson(join(directory, "metadata.json"), {
     id: `artifact-bundle-sha256-${digest}`,
@@ -73,6 +79,8 @@ async function writeValidBundle(directory: string): Promise<void> {
       patch: "files/patch.diff",
       review: "files/review.json",
       testResults: "files/test-results.json",
+      runtimeEpisodeTrace: "files/runtime-episode-trace.json",
+      runtimeEpisodeEvents: "files/runtime-episode.jsonl",
     },
   })
   await writeJson(join(directory, "manifest.json"), manifestFixture(digest))
@@ -101,7 +109,42 @@ function manifestFixture(digest: string) {
       { path: "files/patch.diff", kind: "patch", contentType: "text/x-diff" },
       { path: "files/review.json", kind: "review", contentType: "application/json" },
       { path: "files/test-results.json", kind: "test-results", contentType: "application/json" },
+      { path: "files/runtime-episode-trace.json", kind: "runtime-episode-trace", contentType: "application/json" },
+      { path: "files/runtime-episode.jsonl", kind: "runtime-episode-events", contentType: "application/x-ndjson" },
     ],
+  }
+}
+
+function runtimeEpisodeTraceFixture(digest: string) {
+  const runtime = {
+    id: "runtime-fixture",
+    backend: "wordpress-playground",
+    status: "destroyed",
+    environment: { kind: "wordpress", version: "latest" },
+    createdAt: "2026-05-27T00:00:00.000Z",
+  }
+
+  return {
+    schema: "wp-codebox/runtime-episode-trace/v1",
+    version: 1,
+    id: "trace-runtime-fixture",
+    createdAt: "2026-05-27T00:00:00.000Z",
+    runtime,
+    reset: {
+      id: "runtime-fixture:reset:0",
+      runtime,
+      observations: [],
+      observationRefs: [],
+    },
+    steps: [],
+    snapshots: [],
+    artifactRef: {
+      kind: "artifact-bundle",
+      id: `artifact-bundle-sha256-${digest}`,
+      artifactId: `artifact-bundle-sha256-${digest}`,
+      path: "/tmp/wp-codebox-artifact-verifier/valid",
+      digest: { algorithm: "sha256", value: digest },
+    },
   }
 }
 
@@ -116,6 +159,7 @@ function reviewFixture(digest: string) {
       artifactContentDigest: digest,
       changedFiles: "files/changed-files.json",
       testResults: "files/test-results.json",
+      runtimeEpisodeTrace: "files/runtime-episode-trace.json",
     },
     changedFiles: [{ path: "/wordpress/wp-content/plugins/example/file.txt", status: "added" }],
   }

@@ -292,6 +292,16 @@ const trace = await episode.trace()
 await episode.close()
 ```
 
+When `collectArtifacts()` runs for an episode, WP Codebox persists the trace into
+the artifact bundle at `files/runtime-episode-trace.json` and writes a compact
+stream form to `files/runtime-episode.jsonl`. The bundle manifest advertises
+those files with `runtime-episode-trace` and `runtime-episode-events` kinds,
+`metadata.json` lists them under `artifacts.runtimeEpisodeTrace` and
+`artifacts.runtimeEpisodeEvents`, and `files/review.json` includes
+`evidence.runtimeEpisodeTrace` for review tooling. `verifyArtifactBundle()`
+checks the advertised trace file exists and validates against
+`wp-codebox/runtime-episode-trace/v1`.
+
 Products such as eval harnesses can project this generic episode trace into their
 own action, observation, reward, and report schemas outside WP Codebox.
 
