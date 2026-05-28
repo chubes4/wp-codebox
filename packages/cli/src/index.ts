@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
-import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, createRuntime, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
 import { captureStdout, printArtifactVerifyHumanOutput, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
@@ -1790,18 +1790,17 @@ async function writeRecipeEvidenceJson(artifactRoot: string, path: string, value
 }
 
 async function updateRecipeArtifactEvidenceReferences(artifacts: ArtifactBundle, evidenceFiles: RecipeArtifactEvidenceFile[]): Promise<void> {
-  const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8")) as { files?: Array<Record<string, unknown>> }
+  const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8")) as ArtifactManifest
   manifest.files = Array.isArray(manifest.files) ? manifest.files : []
   for (const file of evidenceFiles) {
     const existing = manifest.files.find((entry) => entry.path === file.path)
-    const manifestFile = { path: file.path, kind: file.kind, contentType: file.contentType }
+    const manifestFile = { path: file.path, kind: file.kind, contentType: file.contentType, sha256: { algorithm: "sha256" as const, value: file.sha256 } }
     if (existing) {
       Object.assign(existing, manifestFile)
     } else {
       manifest.files.push(manifestFile)
     }
   }
-  await writeFile(artifacts.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
   const evidence = Object.fromEntries(evidenceFiles.map((file) => [file.kind, { path: file.path, sha256: file.sha256 }]))
   const metadata = JSON.parse(await readFile(artifacts.metadataPath, "utf8")) as Record<string, unknown>
@@ -1812,6 +1811,18 @@ async function updateRecipeArtifactEvidenceReferences(artifacts: ArtifactBundle,
   const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8")) as Record<string, unknown>
   review.evidence = { ...(isRecord(review.evidence) ? review.evidence : {}), runtimeEvidence: evidence }
   await writeFile(artifacts.reviewPath, `${JSON.stringify(review, null, 2)}\n`)
+
+  for (const file of manifest.files) {
+    if (file.path !== "manifest.json") {
+      file.sha256 = { algorithm: "sha256", value: await calculateArtifactManifestFileSha256(artifacts.directory, manifest, file) }
+    }
+  }
+  for (const file of manifest.files) {
+    if (file.path === "manifest.json") {
+      file.sha256 = { algorithm: "sha256", value: await calculateArtifactManifestFileSha256(artifacts.directory, manifest, file) }
+    }
+  }
+  await writeFile(artifacts.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

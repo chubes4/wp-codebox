@@ -409,7 +409,7 @@ export function buildBlueprintAfterNotes({
 }
 
 export function fileEntry(path: string, kind: ArtifactManifestFile["kind"], contentType: string): ArtifactManifestFile {
-  return { path, kind, contentType }
+  return { path, kind, contentType, sha256: { algorithm: "sha256", value: "0".repeat(64) } }
 }
 
 export function mountTargetPath(mount: MountSpec, relativePath: string): string {

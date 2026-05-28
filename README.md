@@ -642,6 +642,8 @@ Current bundles include:
 
 Artifact bundle ids are content-addressed for the apply-back contract. The runtime writes `manifest.id` as `artifact-bundle-sha256-<digest>`, where `<digest>` is SHA-256 over the exact bytes of `files/changed-files.json` and `files/patch.diff` with the `wp-codebox/artifact-content/v1` domain separator. The same value is exposed as `manifest.contentDigest.value`, `metadata.contentDigest.value`, the CLI `artifacts.contentDigest` field, and `files/review.json` evidence. Approval and apply-back consumers must recompute it before trusting an approved artifact.
 
+Every `manifest.files[]` entry also carries `sha256: { "algorithm": "sha256", "value": "..." }`. For regular files, `value` is the SHA-256 of that artifact file's bytes. For `manifest.json`, `value` is a canonical self-hash over the parsed manifest with the manifest entry's own hash replaced by 64 zeroes, using the `wp-codebox/artifact-manifest-self/v1` domain separator. `wp-codebox artifacts verify` rejects missing hashes and mismatched hashes for any declared file, so tampering with replay-critical or supporting artifacts is detected even when the top-level content digest inputs are unchanged.
+
 ### `files/review.json`
 
 `files/review.json` is the frontend contract for chat and owner review flows. It is derived from canonical artifacts and should be safe for a generic frontend to render without parsing unified diffs.
