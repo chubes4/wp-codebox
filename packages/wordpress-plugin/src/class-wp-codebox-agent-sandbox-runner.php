@@ -14,6 +14,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 	private const SESSION_SCHEMA = 'wp-codebox/sandbox-session/v1';
 	private const TASK_INPUT_SCHEMA = 'wp-codebox/task-input/v1';
 	private const TOOL_DENIAL_SCHEMA = 'wp-codebox/tool-allowlist-denial/v1';
+	private const REMEDIATION_OUTCOME_SCHEMA = 'wp-codebox/agent-sandbox-remediation-outcome/v1';
 	private const DEFAULT_SANDBOX_TOOLS = array(
 		'datamachine/workspace-read',
 		'datamachine/workspace-ls',
@@ -157,7 +158,10 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			);
 		}
 
-		if ( 0 !== $exit_code ) {
+		$strict_remediation_outcome = $this->strict_remediation_outcome( $task_input );
+		$outcome                    = $strict_remediation_outcome ? $this->remediation_outcome( $decoded, $exit_code, $output ) : null;
+
+		if ( 0 !== $exit_code && ! $strict_remediation_outcome ) {
 			return new WP_Error(
 				'wp_codebox_run_failed',
 				'WP Codebox agent sandbox run failed.',
@@ -170,8 +174,8 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			);
 		}
 
-		return array(
-			'success'   => true,
+		$response = array(
+			'success'   => $strict_remediation_outcome ? (bool) ( $outcome['success'] ?? false ) : true,
 			'schema'    => self::SCHEMA,
 			'session'   => $this->sandbox_session( $session_id, 'completed', $input, $decoded, $artifacts ),
 			'task'      => $task,
@@ -182,6 +186,12 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			'exit_code' => $exit_code,
 			'run'       => $decoded,
 		);
+
+		if ( null !== $outcome ) {
+			$response['outcome'] = $outcome;
+		}
+
+		return $response;
 	}
 
 	/**
@@ -861,6 +871,217 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 				'denied_tools'  => $denied,
 				'allowed_tools' => $allowed,
 			)
+		);
+	}
+
+	/** @param array<string,mixed> $task_input Normalized task input. */
+	private function strict_remediation_outcome( array $task_input ): bool {
+		$target = is_array( $task_input['target'] ?? null ) ? $task_input['target'] : array();
+		$policy = is_array( $task_input['policy'] ?? null ) ? $task_input['policy'] : array();
+		$expected_artifacts = is_array( $task_input['expected_artifacts'] ?? null ) ? $task_input['expected_artifacts'] : array();
+
+		foreach ( array( $target['kind'] ?? '', $policy['kind'] ?? '', $policy['outcome_contract'] ?? '', $policy['outcomeContract'] ?? '' ) as $value ) {
+			$value = strtolower( str_replace( '_', '-', trim( (string) $value ) ) );
+			if ( in_array( $value, array( 'audit-remediation', 'agent-sandbox-remediation', 'remediation-outcome' ), true ) ) {
+				return true;
+			}
+		}
+
+		foreach ( $expected_artifacts as $artifact ) {
+			$artifact = strtolower( str_replace( '_', '-', trim( (string) $artifact ) ) );
+			if ( in_array( $artifact, array( 'fix-pr', 'false-positive-pr', 'remediation-pr' ), true ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/** @param array<string,mixed> $run Decoded CLI run output. @return array<string,mixed> */
+	private function remediation_outcome( array $run, int $exit_code, string $output ): array {
+		$datamachine = $this->first_datamachine_metadata( $run );
+		$max_turns_reached = $this->recursive_truthy_key( $run, 'max_turns_reached' ) || true === ( $datamachine['max_turns_reached'] ?? false );
+		$provider_error = $this->provider_error_details( $run, $output );
+		$pr_url = $this->first_url_for_keys( $run, array( 'pr_url', 'pull_request_url', 'pullRequestUrl' ) );
+		$false_positive_pr_url = $this->first_url_for_keys( $run, array( 'false_positive_pr_url', 'falsePositivePrUrl' ) );
+
+		$outcome = array(
+			'schema'      => self::REMEDIATION_OUTCOME_SCHEMA,
+			'success'     => false,
+			'kind'        => 'agent_no_pr_outcome',
+			'failure'     => 'agent_no_pr_outcome',
+			'exit_code'   => $exit_code,
+			'retryable'   => false,
+			'diagnostics' => array_filter(
+				array(
+					'datamachine_completed' => array_key_exists( 'completed', $datamachine ) ? (bool) $datamachine['completed'] : null,
+					'max_turns_reached'     => $max_turns_reached,
+				),
+				static fn( mixed $value ): bool => null !== $value
+			),
+		);
+
+		if ( ! empty( $datamachine ) ) {
+			$outcome['metadata'] = array( 'datamachine' => $datamachine );
+		}
+
+		if ( '' !== $false_positive_pr_url ) {
+			$outcome['success'] = true;
+			$outcome['kind'] = 'false_positive_pr';
+			$outcome['false_positive_pr_url'] = $false_positive_pr_url;
+			unset( $outcome['failure'] );
+			return $outcome;
+		}
+
+		if ( '' !== $pr_url ) {
+			$outcome['success'] = true;
+			$outcome['kind'] = 'fix_pr';
+			$outcome['pr_url'] = $pr_url;
+			unset( $outcome['failure'] );
+			return $outcome;
+		}
+
+		if ( $max_turns_reached ) {
+			$outcome['kind'] = 'max_turns_exceeded';
+			$outcome['failure'] = 'max_turns_exceeded';
+			$outcome['retryable'] = true;
+			return $outcome;
+		}
+
+		if ( 0 !== $exit_code || ! empty( $provider_error ) ) {
+			$outcome['kind'] = 'provider_error';
+			$outcome['failure'] = 'provider_error';
+			$outcome['provider_error'] = $provider_error;
+			$outcome['retryable'] = (bool) ( $provider_error['retryable'] ?? true );
+		}
+
+		return $outcome;
+	}
+
+	/** @param array<string,mixed> $run Decoded CLI run output. @return array<string,mixed> */
+	private function first_datamachine_metadata( array $run ): array {
+		$payloads = array_merge( array( $run ), $this->agent_payloads( $run ) );
+		foreach ( $payloads as $payload ) {
+			$metadata = is_array( $payload['metadata'] ?? null ) ? $payload['metadata'] : array();
+			$datamachine = is_array( $metadata['datamachine'] ?? null ) ? $metadata['datamachine'] : array();
+			if ( ! empty( $datamachine ) ) {
+				return $datamachine;
+			}
+		}
+
+		return array();
+	}
+
+	/** @param array<string,mixed> $run Decoded CLI run output. @return array<int,array<string,mixed>> */
+	private function agent_payloads( array $run ): array {
+		$payloads = array();
+		foreach ( is_array( $run['executions'] ?? null ) ? $run['executions'] : array() as $execution ) {
+			if ( ! is_array( $execution ) ) {
+				continue;
+			}
+
+			foreach ( array( 'stdout', 'stderr' ) as $stream ) {
+				$decoded = $this->decode_json_fragment( (string) ( $execution[ $stream ] ?? '' ) );
+				if ( is_array( $decoded ) ) {
+					$payloads[] = is_array( $decoded['result'] ?? null ) ? $decoded['result'] : $decoded;
+				}
+			}
+		}
+
+		return $payloads;
+	}
+
+	/** @return array<string,mixed>|null */
+	private function decode_json_fragment( string $text ): ?array {
+		$text = trim( $text );
+		if ( '' === $text ) {
+			return null;
+		}
+
+		$decoded = json_decode( $text, true );
+		if ( is_array( $decoded ) ) {
+			return $decoded;
+		}
+
+		$start = strpos( $text, '{' );
+		$end   = strrpos( $text, '}' );
+		if ( false === $start || false === $end || $end <= $start ) {
+			return null;
+		}
+
+		$decoded = json_decode( substr( $text, $start, $end - $start + 1 ), true );
+
+		return is_array( $decoded ) ? $decoded : null;
+	}
+
+	/** @param array<string,mixed> $run Decoded CLI run output. @param string[] $keys */
+	private function first_url_for_keys( array $run, array $keys ): string {
+		foreach ( array_merge( array( $run ), $this->agent_payloads( $run ) ) as $payload ) {
+			$url = $this->recursive_first_string_key( $payload, $keys );
+			if ( '' !== $url && preg_match( '#^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+#', $url ) ) {
+				return $url;
+			}
+		}
+
+		return '';
+	}
+
+	/** @param array<string,mixed> $payload @param string[] $keys */
+	private function recursive_first_string_key( array $payload, array $keys ): string {
+		foreach ( $payload as $key => $value ) {
+			if ( in_array( (string) $key, $keys, true ) && ! is_array( $value ) && '' !== trim( (string) $value ) ) {
+				return trim( (string) $value );
+			}
+
+			if ( is_array( $value ) ) {
+				$nested = $this->recursive_first_string_key( $value, $keys );
+				if ( '' !== $nested ) {
+					return $nested;
+				}
+			}
+		}
+
+		return '';
+	}
+
+	/** @param array<string,mixed> $payload */
+	private function recursive_truthy_key( array $payload, string $needle ): bool {
+		foreach ( $payload as $key => $value ) {
+			if ( $needle === (string) $key && true === (bool) $value ) {
+				return true;
+			}
+
+			if ( is_array( $value ) && $this->recursive_truthy_key( $value, $needle ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/** @param array<string,mixed> $run Decoded CLI run output. @return array<string,mixed> */
+	private function provider_error_details( array $run, string $output ): array {
+		$payloads = array_merge( array( $run ), $this->agent_payloads( $run ) );
+		$json     = function_exists( 'wp_json_encode' ) ? wp_json_encode( $payloads, JSON_UNESCAPED_SLASHES ) : json_encode( $payloads, JSON_UNESCAPED_SLASHES );
+		$encoded  = strtolower( is_string( $json ) ? $json : '' );
+		$output_l = strtolower( $output );
+		$haystack = $encoded . "\n" . $output_l;
+
+		if ( ! preg_match( '/provider|timeout|timed out|429|rate limit|too many requests|openai|anthropic/', $haystack ) ) {
+			return array();
+		}
+
+		$message = $this->recursive_first_string_key( $run, array( 'message', 'error', 'error_message', 'errorMessage', 'details' ) );
+		if ( '' === $message ) {
+			$message = $this->bound_output( $output );
+		}
+
+		return array_filter(
+			array(
+				'message'   => $this->bound_output( $message ),
+				'retryable' => (bool) preg_match( '/timeout|timed out|429|rate limit|too many requests/', $haystack ),
+			),
+			static fn( mixed $value ): bool => null !== $value && '' !== $value
 		);
 	}
 

@@ -145,6 +145,7 @@ $assert( 'ability exposes external sandbox session schema', 'string' === ( $abil
 $assert( 'session schema pins external orchestrator persistence', array( 'external-orchestrator' ) === ( $ability['output_schema']['properties']['session']['properties']['persistence']['enum'] ?? array() ) && str_contains( $ability['output_schema']['properties']['session']['properties']['persistence']['description'] ?? '', 'does not persist' ) );
 $assert( 'session schema keeps durable lifecycle external', array( 'completed' ) === ( $ability['output_schema']['properties']['session']['properties']['status']['enum'] ?? array() ) && str_contains( $ability['output_schema']['properties']['session']['properties']['status']['description'] ?? '', 'external orchestrator' ) );
 $assert( 'ability exposes preview configuration schema', 'integer' === ( $ability['input_schema']['properties']['preview_port']['type'] ?? '' ) && 'string' === ( $ability['input_schema']['properties']['preview_bind']['type'] ?? '' ) && 'string' === ( $ability['input_schema']['properties']['preview_public_url']['type'] ?? '' ) );
+$assert( 'ability exposes strict remediation outcome schema', isset( $ability['output_schema']['properties']['outcome']['properties']['kind']['enum'] ) && in_array( 'provider_error', $ability['output_schema']['properties']['outcome']['properties']['kind']['enum'], true ) );
 $assert( 'ability omits raw code input', ! isset( $ability['input_schema']['properties']['code'] ) && ! isset( $ability['input_schema']['properties']['code_file'] ) );
 $assert( 'permission defaults to manage_options', true === call_user_func( $ability['permission_callback'] ) );
 
@@ -546,6 +547,103 @@ $assert( 'runner preserves structured target', ! is_wp_error( $structured_result
 $assert( 'runner normalizes task input lists', ! is_wp_error( $structured_result ) && array( 'workspace.read', 'workspace.write', 'datamachine/workspace-read' ) === ( $structured_result['task_input']['allowed_tools'] ?? array() ) && array( 'patch', 'tests' ) === ( $structured_result['task_input']['expected_artifacts'] ?? array() ) );
 $assert( 'runner passes structured task contract to recipe', str_contains( $captured_recipe, 'wp-codebox/task-input/v1' ) && str_contains( $captured_recipe, 'allowed_tools' ) );
 $assert( 'runner leaves preview config unset by default', ! str_contains( $captured_command, '--preview-port' ) && ! str_contains( $captured_command, '--preview-bind' ) && ! str_contains( $captured_command, '--preview-public-url' ) );
+
+$remediation_run = function ( array $agent_payload, int $exit_code = 0, array $run_overrides = array() ) use ( $root ): array|WP_Error {
+	$strict_runner = new WP_Codebox_Agent_Sandbox_Runner(
+		array(
+			'shell_available' => fn() => true,
+			'command_runner'  => function () use ( $agent_payload, $exit_code, $run_overrides ): array {
+				$run = array_merge(
+					array(
+						'success'    => 0 === $exit_code,
+						'schema'     => 'wp-codebox/recipe-run/v1',
+						'executions' => array(
+							array(
+								'command'  => 'wp-codebox.agent-sandbox-run',
+								'exitCode' => $exit_code,
+								'stdout'   => json_encode( array( 'result' => $agent_payload ) ),
+								'stderr'   => '',
+							),
+						),
+					),
+					$run_overrides
+				);
+
+				return array(
+					'exit_code' => $exit_code,
+					'output'    => json_encode( $run ),
+				);
+			},
+		)
+	);
+
+	return $strict_runner->run(
+		array(
+			'goal'               => 'Remediate audit finding.',
+			'target'             => array( 'kind' => 'audit-remediation' ),
+			'expected_artifacts' => array( 'fix_pr', 'false_positive_pr' ),
+			'artifacts_path'     => $root . '/artifacts',
+		)
+	);
+};
+
+$provider_error_result = $remediation_run(
+	array(
+		'error'    => array(
+			'message' => 'Provider timeout after OpenAI 429 Too Many Requests.',
+			'code'    => 'provider_rate_limited',
+		),
+		'metadata' => array(
+			'datamachine' => array(
+				'completed'         => false,
+				'max_turns_reached' => false,
+			),
+		),
+	),
+	1
+);
+$assert( 'strict remediation outcome classifies provider timeout and 429', ! is_wp_error( $provider_error_result ) && false === ( $provider_error_result['success'] ?? true ) && 'provider_error' === ( $provider_error_result['outcome']['kind'] ?? '' ) && true === ( $provider_error_result['outcome']['retryable'] ?? false ) );
+$assert( 'strict remediation outcome preserves provider and Data Machine diagnostics', ! is_wp_error( $provider_error_result ) && str_contains( $provider_error_result['outcome']['provider_error']['message'] ?? '', 'Provider timeout' ) && false === ( $provider_error_result['outcome']['metadata']['datamachine']['completed'] ?? true ) );
+
+$text_false_positive_result = $remediation_run(
+	array(
+		'answer'   => 'This looks like a false positive; no code changes are needed.',
+		'metadata' => array( 'datamachine' => array( 'completed' => true, 'max_turns_reached' => false ) ),
+	)
+);
+$assert( 'strict remediation outcome rejects text-only false-positive conclusions without PR', ! is_wp_error( $text_false_positive_result ) && false === ( $text_false_positive_result['success'] ?? true ) && 'agent_no_pr_outcome' === ( $text_false_positive_result['outcome']['kind'] ?? '' ) );
+
+$normal_no_pr_result = $remediation_run(
+	array(
+		'answer'   => 'Done.',
+		'metadata' => array( 'datamachine' => array( 'completed' => true, 'max_turns_reached' => false ) ),
+	)
+);
+$assert( 'strict remediation outcome rejects normal answers without PR', ! is_wp_error( $normal_no_pr_result ) && false === ( $normal_no_pr_result['success'] ?? true ) && 'agent_no_pr_outcome' === ( $normal_no_pr_result['outcome']['failure'] ?? '' ) );
+
+$fix_pr_result = $remediation_run(
+	array(
+		'pr_url'   => 'https://github.com/chubes4/wp-codebox/pull/2020',
+		'metadata' => array( 'datamachine' => array( 'completed' => true, 'max_turns_reached' => false ) ),
+	)
+);
+$assert( 'strict remediation outcome accepts valid fix PR URL', ! is_wp_error( $fix_pr_result ) && true === ( $fix_pr_result['success'] ?? false ) && 'fix_pr' === ( $fix_pr_result['outcome']['kind'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/2020' === ( $fix_pr_result['outcome']['pr_url'] ?? '' ) );
+
+$false_positive_pr_result = $remediation_run(
+	array(
+		'false_positive_pr_url' => 'https://github.com/chubes4/wp-codebox/pull/2021',
+		'metadata'              => array( 'datamachine' => array( 'completed' => true, 'max_turns_reached' => false ) ),
+	)
+);
+$assert( 'strict remediation outcome accepts valid false-positive PR URL', ! is_wp_error( $false_positive_pr_result ) && true === ( $false_positive_pr_result['success'] ?? false ) && 'false_positive_pr' === ( $false_positive_pr_result['outcome']['kind'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/2021' === ( $false_positive_pr_result['outcome']['false_positive_pr_url'] ?? '' ) );
+
+$max_turns_result = $remediation_run(
+	array(
+		'answer'   => 'Still working.',
+		'metadata' => array( 'datamachine' => array( 'completed' => false, 'max_turns_reached' => true ) ),
+	)
+);
+$assert( 'strict remediation outcome preserves max turns exhaustion', ! is_wp_error( $max_turns_result ) && false === ( $max_turns_result['success'] ?? true ) && 'max_turns_exceeded' === ( $max_turns_result['outcome']['kind'] ?? '' ) && true === ( $max_turns_result['outcome']['diagnostics']['max_turns_reached'] ?? false ) );
 
 $parent_only_tool = $runner->run(
 	array(

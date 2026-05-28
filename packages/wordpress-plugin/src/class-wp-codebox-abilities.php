@@ -65,6 +65,7 @@ final class WP_Codebox_Abilities {
 			$browser_session_schema = self::browser_playground_session_schema();
 			$session_input     = self::sandbox_session_input_schema();
 			$preview_schema    = self::preview_input_schema();
+			$outcome_schema    = self::remediation_outcome_schema();
 			$artifact_id_schema = array(
 				'artifact_id'    => array(
 					'type'        => 'string',
@@ -170,6 +171,7 @@ final class WP_Codebox_Abilities {
 							'paths'     => array( 'type' => 'object' ),
 							'artifacts' => array( 'type' => 'string' ),
 							'exit_code' => array( 'type' => 'integer' ),
+							'outcome'   => $outcome_schema,
 							'run'       => array( 'type' => 'object' ),
 						),
 					),
@@ -260,6 +262,7 @@ final class WP_Codebox_Abilities {
 										'artifact_id' => array( 'type' => 'string' ),
 										'preview_url' => array( 'type' => 'string' ),
 										'artifacts'   => array( 'type' => 'object' ),
+										'outcome'     => $outcome_schema,
 										'run'         => array( 'type' => 'object' ),
 										'error'       => array( 'type' => 'object' ),
 									),
@@ -595,6 +598,33 @@ final class WP_Codebox_Abilities {
 					'type'   => array( 'type' => 'string' ),
 					'job_id' => array( 'type' => 'string' ),
 				),
+			),
+		);
+	}
+
+	/** @return array<string,mixed> */
+	private static function remediation_outcome_schema(): array {
+		return array(
+			'type'        => 'object',
+			'description' => 'Strict audit-remediation terminal outcome. Successful outcomes require a fix PR or false-positive PR URL; failure outcomes are machine-classified.',
+			'properties'  => array(
+				'schema'                => array( 'type' => 'string' ),
+				'success'               => array( 'type' => 'boolean' ),
+				'kind'                  => array(
+					'type' => 'string',
+					'enum' => array( 'fix_pr', 'false_positive_pr', 'provider_error', 'agent_no_pr_outcome', 'max_turns_exceeded' ),
+				),
+				'failure'               => array(
+					'type' => 'string',
+					'enum' => array( 'provider_error', 'agent_no_pr_outcome', 'max_turns_exceeded' ),
+				),
+				'pr_url'                => array( 'type' => 'string' ),
+				'false_positive_pr_url' => array( 'type' => 'string' ),
+				'exit_code'             => array( 'type' => 'integer' ),
+				'retryable'             => array( 'type' => 'boolean' ),
+				'provider_error'        => array( 'type' => 'object' ),
+				'metadata'              => array( 'type' => 'object' ),
+				'diagnostics'           => array( 'type' => 'object' ),
 			),
 		);
 	}
