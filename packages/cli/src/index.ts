@@ -4,7 +4,7 @@ import { createWriteStream } from "node:fs"
 import { createHash } from "node:crypto"
 import { execFile, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
-import { basename, dirname, join, resolve } from "node:path"
+import { basename, dirname, join, relative, resolve } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { promisify } from "node:util"
@@ -123,6 +123,37 @@ interface RecipeRunOptions {
   previewBind?: string
   json: boolean
   dryRun: boolean
+}
+
+interface RecipeArtifactEvidenceFile {
+  path: string
+  sha256: string
+  kind: string
+  contentType: string
+}
+
+interface RecipeArtifactEvidenceResult {
+  artifactVerification?: ArtifactBundleVerificationResult & {
+    artifact: RecipeArtifactEvidenceFile
+    strict: boolean
+  }
+  workspacePolicy?: RecipeWorkspacePolicyArtifactResult & {
+    artifact: RecipeArtifactEvidenceFile
+    strict: boolean
+  }
+}
+
+interface RecipeWorkspacePolicyArtifactResult {
+  schema: "wp-codebox/workspace-policy-artifacts/v1"
+  passed: boolean
+  checks: Array<{
+    workspace: {
+      target: string
+      mode: "readonly" | "readwrite"
+      metadata?: Record<string, unknown>
+    }
+    result: WorkspacePolicyResult
+  }>
 }
 
 interface RecipeValidateOptions {
@@ -685,10 +716,41 @@ const workspaceRecipeJsonSchema: RecipeSchemaOutput["jsonSchema"] = {
       additionalProperties: false,
       properties: {
         directory: { type: "string" },
+        verify: { $ref: "#/$defs/artifactVerifier" },
+        workspacePolicy: { $ref: "#/$defs/workspacePolicyArtifact" },
       },
     },
   },
   $defs: {
+    artifactVerifier: {
+      oneOf: [
+        { type: "boolean" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+            strict: { type: "boolean" },
+          },
+        },
+      ],
+    },
+    workspacePolicyArtifact: {
+      oneOf: [
+        { type: "boolean" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+            strict: { type: "boolean" },
+            writableRoots: { type: "array", items: { type: "string" } },
+            hiddenPaths: { type: "array", items: { type: "string" } },
+            gitBacked: { type: "boolean" },
+          },
+        },
+      ],
+    },
     metadata: {
       type: "object",
       additionalProperties: true,
@@ -1466,12 +1528,30 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
     await runtime.observe({ type: "runtime-info" })
     await runtime.observe({ type: "mounts" })
     artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true, previewHoldSeconds: options.previewHoldSeconds })
+    const evidence = await finalizeRecipeArtifactEvidence(artifacts, recipe, workspaceMounts, stagedFiles)
+    const strictFailure = recipeArtifactEvidenceFailure(evidence)
     const runtimeInfo = options.previewHoldSeconds ? await runtime.info() : undefined
     await releaseRuntime(runtime, options.previewHoldSeconds, () => cleanupRecipePreparedSources(workspaceMounts, extraPlugins, stagedFiles))
 
     const benchResultsList = executions
       .filter((execution) => execution.command === "wordpress.bench" && execution.exitCode === 0)
       .map((execution) => parseBenchResults(execution.stdout))
+
+    if (strictFailure) {
+      return {
+        success: false,
+        schema: "wp-codebox/recipe-run/v1",
+        recipePath,
+        runtime: runtimeInfo ?? await runtime.info(),
+        executions,
+        stagedFiles: stagedFiles.map(recipeRunStagedFile),
+        siteSeeds,
+        ...(benchResultsList.length === 1 ? { benchResults: benchResultsList[0] } : {}),
+        ...(benchResultsList.length > 0 ? { benchResultsList } : {}),
+        artifacts,
+        error: strictFailure,
+      }
+    }
 
     return {
       success: true,
@@ -1512,6 +1592,230 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
       error: serializeError(error),
     }
   }
+}
+
+async function finalizeRecipeArtifactEvidence(
+  artifacts: ArtifactBundle,
+  recipe: WorkspaceRecipe,
+  workspaceMounts: PreparedWorkspaceMount[],
+  stagedFiles: PreparedStagedFile[],
+): Promise<RecipeArtifactEvidenceResult> {
+  const result: RecipeArtifactEvidenceResult = {}
+  const verifier = normalizeArtifactToggle(recipe.artifacts?.verify)
+  const workspacePolicy = normalizeWorkspacePolicyArtifact(recipe.artifacts?.workspacePolicy)
+
+  if (!verifier.enabled && !workspacePolicy.enabled) {
+    return result
+  }
+
+  const evidenceDirectory = join(dirname(artifacts.reviewPath), "runtime-evidence")
+  await mkdir(evidenceDirectory, { recursive: true })
+
+  const evidenceFiles: RecipeArtifactEvidenceFile[] = []
+  if (workspacePolicy.enabled) {
+    const workspacePolicyPath = join(evidenceDirectory, "workspace-policy.json")
+    const policyResult = await buildRecipeWorkspacePolicyResult(recipe, workspaceMounts, stagedFiles, workspacePolicy)
+    const policyFile = await writeRecipeEvidenceJson(artifacts.directory, workspacePolicyPath, policyResult, "workspace-policy-result")
+    artifacts.workspacePolicyPath = workspacePolicyPath
+    evidenceFiles.push(policyFile)
+    result.workspacePolicy = {
+      ...policyResult,
+      artifact: policyFile,
+      strict: workspacePolicy.strict,
+    }
+  }
+
+  if (verifier.enabled) {
+    const verificationPath = join(evidenceDirectory, "artifact-bundle-verification.json")
+    const placeholder = {
+      schema: "wp-codebox/artifact-bundle-verification/v1",
+      bundleDirectory: artifacts.directory,
+      valid: false,
+      violations: [],
+      status: "pending",
+    }
+    const placeholderFile = await writeRecipeEvidenceJson(artifacts.directory, verificationPath, placeholder, "artifact-bundle-verification")
+    artifacts.artifactVerificationPath = verificationPath
+    evidenceFiles.push(placeholderFile)
+    await updateRecipeArtifactEvidenceReferences(artifacts, evidenceFiles)
+
+    const verification = await verifyArtifactBundle(artifacts.directory)
+    const verificationFile = await writeRecipeEvidenceJson(artifacts.directory, verificationPath, verification, "artifact-bundle-verification")
+    const verificationFiles = evidenceFiles.map((file) => file.path === verificationFile.path ? verificationFile : file)
+    await updateRecipeArtifactEvidenceReferences(artifacts, verificationFiles)
+    result.artifactVerification = {
+      ...verification,
+      artifact: verificationFile,
+      strict: verifier.strict,
+    }
+    return result
+  }
+
+  await updateRecipeArtifactEvidenceReferences(artifacts, evidenceFiles)
+  return result
+}
+
+function recipeArtifactEvidenceFailure(evidence: RecipeArtifactEvidenceResult): RunOutput["error"] | undefined {
+  if (evidence.artifactVerification?.strict && !evidence.artifactVerification.valid) {
+    return {
+      name: "ArtifactVerificationError",
+      code: "artifact-verification-failed",
+      message: `Artifact verification failed with ${evidence.artifactVerification.violations.length} violation${evidence.artifactVerification.violations.length === 1 ? "" : "s"}.`,
+    }
+  }
+
+  if (evidence.workspacePolicy?.strict && !evidence.workspacePolicy.passed) {
+    const violations = evidence.workspacePolicy.checks.reduce((count, check) => count + check.result.violations.length, 0)
+    return {
+      name: "WorkspacePolicyError",
+      code: "workspace-policy-failed",
+      message: `Workspace policy failed with ${violations} violation${violations === 1 ? "" : "s"}.`,
+    }
+  }
+
+  return undefined
+}
+
+function normalizeArtifactToggle(value: boolean | { enabled?: boolean; strict?: boolean } | undefined): { enabled: boolean; strict: boolean } {
+  if (value === undefined || value === false) {
+    return { enabled: false, strict: false }
+  }
+  if (value === true) {
+    return { enabled: true, strict: false }
+  }
+  if (value && typeof value === "object") {
+    return { enabled: value.enabled !== false, strict: value.strict === true }
+  }
+  return { enabled: false, strict: false }
+}
+
+function normalizeWorkspacePolicyArtifact(value: boolean | { enabled?: boolean; strict?: boolean; writableRoots?: string[]; hiddenPaths?: string[]; gitBacked?: boolean } | undefined): {
+  enabled: boolean
+  strict: boolean
+  writableRoots: string[]
+  hiddenPaths: string[]
+  gitBacked: boolean
+} {
+  if (value === undefined || value === false) {
+    return { enabled: false, strict: false, writableRoots: ["."], hiddenPaths: [], gitBacked: false }
+  }
+  if (value === true) {
+    return { enabled: true, strict: false, writableRoots: ["."], hiddenPaths: [], gitBacked: false }
+  }
+  if (value && typeof value === "object") {
+    return {
+      enabled: value.enabled !== false,
+      strict: value.strict === true,
+      writableRoots: Array.isArray(value.writableRoots) && value.writableRoots.length > 0 ? value.writableRoots : ["."],
+      hiddenPaths: Array.isArray(value.hiddenPaths) ? value.hiddenPaths : [],
+      gitBacked: value.gitBacked === true,
+    }
+  }
+  return { enabled: false, strict: false, writableRoots: ["."], hiddenPaths: [], gitBacked: false }
+}
+
+async function buildRecipeWorkspacePolicyResult(
+  recipe: WorkspaceRecipe,
+  workspaceMounts: PreparedWorkspaceMount[],
+  stagedFiles: PreparedStagedFile[],
+  policy: { writableRoots: string[]; hiddenPaths: string[]; gitBacked: boolean },
+): Promise<RecipeWorkspacePolicyArtifactResult> {
+  const checks = []
+  for (const workspace of workspaceMounts.filter((mount) => mount.mode === "readwrite")) {
+    checks.push({
+      workspace: {
+        target: workspace.target,
+        mode: workspace.mode,
+        metadata: workspace.metadata,
+      },
+      result: await checkWorkspacePolicy({
+        workspaceRoot: workspace.source,
+        writableRoots: policy.writableRoots,
+        hiddenPaths: policy.hiddenPaths,
+        gitBacked: policy.gitBacked,
+      }),
+    })
+  }
+
+  for (const [index, mount] of (recipe.inputs?.mounts ?? []).entries()) {
+    if ((mount.mode ?? "readwrite") !== "readwrite") {
+      continue
+    }
+    checks.push(uncheckedReadwriteInputPolicyCheck(`inputs.mounts[${index}]`, mount.target, mount.metadata))
+  }
+
+  for (const [index, stagedFile] of stagedFiles.entries()) {
+    checks.push(uncheckedReadwriteInputPolicyCheck(`inputs.stagedFiles[${index}]`, stagedFile.target, stagedFile.metadata))
+  }
+
+  return {
+    schema: "wp-codebox/workspace-policy-artifacts/v1",
+    passed: checks.every((check) => check.result.passed),
+    checks,
+  }
+}
+
+function uncheckedReadwriteInputPolicyCheck(sourceField: string, target: string, metadata?: Record<string, unknown>): RecipeWorkspacePolicyArtifactResult["checks"][number] {
+  return {
+    workspace: {
+      target,
+      mode: "readwrite",
+      metadata: { ...(metadata ?? {}), sourceField },
+    },
+    result: {
+      schema: "wp-codebox/workspace-policy-result/v1",
+      passed: false,
+      policy_sha256: createHash("sha256").update(JSON.stringify({ sourceField, target })).digest("hex"),
+      violations: [
+        {
+          code: "path-outside-workspace",
+          path: target,
+          message: `${sourceField} is mounted readwrite but is not a declared workspace policy root. Use inputs.workspaces for policy-checked writable sources or make the mount readonly.`,
+          details: { sourceField, target },
+        },
+      ],
+    },
+  }
+}
+
+async function writeRecipeEvidenceJson(artifactRoot: string, path: string, value: unknown, kind: string): Promise<RecipeArtifactEvidenceFile> {
+  const json = `${JSON.stringify(value, null, 2)}\n`
+  await writeFile(path, json)
+  return {
+    path: relative(artifactRoot, path),
+    sha256: createHash("sha256").update(json).digest("hex"),
+    kind,
+    contentType: "application/json",
+  }
+}
+
+async function updateRecipeArtifactEvidenceReferences(artifacts: ArtifactBundle, evidenceFiles: RecipeArtifactEvidenceFile[]): Promise<void> {
+  const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8")) as { files?: Array<Record<string, unknown>> }
+  manifest.files = Array.isArray(manifest.files) ? manifest.files : []
+  for (const file of evidenceFiles) {
+    const existing = manifest.files.find((entry) => entry.path === file.path)
+    const manifestFile = { path: file.path, kind: file.kind, contentType: file.contentType }
+    if (existing) {
+      Object.assign(existing, manifestFile)
+    } else {
+      manifest.files.push(manifestFile)
+    }
+  }
+  await writeFile(artifacts.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+
+  const evidence = Object.fromEntries(evidenceFiles.map((file) => [file.kind, { path: file.path, sha256: file.sha256 }]))
+  const metadata = JSON.parse(await readFile(artifacts.metadataPath, "utf8")) as Record<string, unknown>
+  metadata.artifacts = { ...(isRecord(metadata.artifacts) ? metadata.artifacts : {}), runtimeEvidence: evidence }
+  metadata.evidence = { ...(isRecord(metadata.evidence) ? metadata.evidence : {}), runtimeEvidence: evidence }
+  await writeFile(artifacts.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`)
+
+  const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8")) as Record<string, unknown>
+  review.evidence = { ...(isRecord(review.evidence) ? review.evidence : {}), runtimeEvidence: evidence }
+  await writeFile(artifacts.reviewPath, `${JSON.stringify(review, null, 2)}\n`)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 async function validateRecipe(options: RecipeValidateOptions): Promise<RecipeValidateOutput> {

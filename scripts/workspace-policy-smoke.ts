@@ -21,6 +21,12 @@ assert.equal(passing.passed, true)
 assert.equal(passing.schema, "wp-codebox/workspace-policy-result/v1")
 assert.match(passing.policy_sha256, /^[a-f0-9]{64}$/)
 
+const passingWholeWorkspace = await checkWorkspacePolicy({
+  workspaceRoot: root,
+  writableRoots: ["."],
+})
+assert.equal(passingWholeWorkspace.passed, true)
+
 await mkdir(join(root, "private"), { recursive: true })
 await writeFile(join(root, "private", "secret.txt"), "secret\n")
 await symlink("../private/secret.txt", join(root, "src", "secret-link"))

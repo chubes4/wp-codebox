@@ -67,7 +67,7 @@ export async function checkWorkspacePolicy(options: WorkspacePolicyCheckOptions)
     ["hidden path", policy.hiddenPaths],
   ] as const) {
     for (const path of paths) {
-      if (!path || path === "." || isAbsolute(path) || path === ".." || path.startsWith(`..${sep}`)) {
+      if (!path || isAbsolute(path) || path === ".." || path.startsWith(`..${sep}`)) {
         violations.push({
           code: "invalid-policy-path",
           path,
@@ -256,7 +256,7 @@ function normalizePolicyPath(path: string): string {
 }
 
 function isPathUnderAny(path: string, roots: string[]): boolean {
-  return roots.some((root) => path === root || path.startsWith(`${root}/`))
+  return roots.some((root) => root === "." || path === root || path.startsWith(`${root}/`))
 }
 
 function hasNestedGitMetadata(path: string): boolean {
