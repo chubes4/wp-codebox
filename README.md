@@ -309,6 +309,16 @@ const trace = await episode.trace()
 await episode.close()
 ```
 
+When `collectArtifacts()` runs for an episode, WP Codebox persists the trace into
+the artifact bundle at `files/runtime-episode-trace.json` and writes a compact
+stream form to `files/runtime-episode.jsonl`. The bundle manifest advertises
+those files with `runtime-episode-trace` and `runtime-episode-events` kinds,
+`metadata.json` lists them under `artifacts.runtimeEpisodeTrace` and
+`artifacts.runtimeEpisodeEvents`, and `files/review.json` includes
+`evidence.runtimeEpisodeTrace` for review tooling. `verifyArtifactBundle()`
+checks the advertised trace file exists and validates against
+`wp-codebox/runtime-episode-trace/v1`.
+
 Products such as eval harnesses can project this generic episode trace into their
 own action, observation, reward, and report schemas outside WP Codebox.
 
@@ -648,6 +658,8 @@ Current bundles include:
 ```
 
 Artifact bundle ids are content-addressed for the apply-back contract. The runtime writes `manifest.id` as `artifact-bundle-sha256-<digest>`, where `<digest>` is SHA-256 over the exact bytes of `files/changed-files.json` and `files/patch.diff` with the `wp-codebox/artifact-content/v1` domain separator. The same value is exposed as `manifest.contentDigest.value`, `metadata.contentDigest.value`, the CLI `artifacts.contentDigest` field, and `files/review.json` evidence. Approval and apply-back consumers must recompute it before trusting an approved artifact.
+
+Every `manifest.files[]` entry also carries `sha256: { "algorithm": "sha256", "value": "..." }`. For regular files, `value` is the SHA-256 of that artifact file's bytes. For `manifest.json`, `value` is a canonical self-hash over the parsed manifest with the manifest entry's own hash replaced by 64 zeroes, using the `wp-codebox/artifact-manifest-self/v1` domain separator. `wp-codebox artifacts verify` rejects missing hashes and mismatched hashes for any declared file, so tampering with replay-critical or supporting artifacts is detected even when the top-level content digest inputs are unchanged.
 
 ### `files/review.json`
 

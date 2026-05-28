@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { readdir, readFile, stat } from "node:fs/promises"
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { isAbsolute, join, normalize, sep } from "node:path"
 
 export * from "./workspace-policy.js"
@@ -532,6 +532,12 @@ export interface ArtifactManifestFile {
     | "test-results"
     | (string & {})
   contentType: string
+  sha256: ArtifactFileDigest
+}
+
+export interface ArtifactFileDigest {
+  algorithm: "sha256"
+  value: string
 }
 
 export interface ArtifactManifest {
@@ -621,6 +627,7 @@ export interface ArtifactReview {
     artifactContentDigest: string
     changedFiles: string
     testResults?: string
+    runtimeEpisodeTrace?: string
   }
   browser?: ArtifactReviewBrowserSummary
   redaction?: ArtifactRedactionSummary
@@ -716,6 +723,8 @@ export interface ArtifactBundle {
   testResultsPath: string
   reviewPath: string
   runAttestationPath?: string
+  runtimeEpisodeTracePath?: string
+  runtimeEpisodeEventsPath?: string
   artifactVerificationPath?: string
   workspacePolicyPath?: string
   preview?: ArtifactPreview
@@ -731,6 +740,8 @@ export type ArtifactBundleVerificationViolationCode =
   | "missing-file"
   | "orphaned-file"
   | "digest-mismatch"
+  | "missing-file-hash"
+  | "file-hash-mismatch"
   | "bundle-id-mismatch"
   | "malformed-reference"
   | "review-evidence-mismatch"
@@ -819,10 +830,12 @@ export async function verifyArtifactBundle(directory: string, options: VerifyArt
     }
   }
 
+  await verifyManifestFileHashes(bundleDirectory, manifest, manifestFileName, violations)
   await verifyContentDigest(bundleDirectory, manifest, violations)
   verifyBundleId(manifest, violations)
   await verifyMetadataReferences(bundleDirectory, manifestFiles, violations)
   await verifyReviewEvidence(bundleDirectory, manifest, manifestFiles, violations)
+  await verifyRuntimeEpisodeTraceArtifacts(bundleDirectory, manifest, violations)
 
   return artifactBundleVerificationResult(bundleDirectory, violations, manifest)
 }
@@ -838,6 +851,53 @@ export async function calculateArtifactContentDigest(directory: string, inputs: 
   }
 
   return hash.digest("hex")
+}
+
+export async function calculateArtifactManifestFileSha256(directory: string, manifest: ArtifactManifest, file: ArtifactManifestFile, manifestFileName = "manifest.json"): Promise<string> {
+  if (file.path === manifestFileName) {
+    return calculateArtifactManifestSelfSha256(manifest, manifestFileName)
+  }
+
+  return createHash("sha256").update(await readFile(join(directory, file.path))).digest("hex")
+}
+
+export function calculateArtifactManifestSelfSha256(manifest: ArtifactManifest, manifestFileName = "manifest.json"): string {
+  return createHash("sha256")
+    .update("wp-codebox/artifact-manifest-self/v1\n")
+    .update(stableJson(manifestWithPlaceholderSelfHash(manifest, manifestFileName)))
+    .digest("hex")
+}
+
+function manifestWithPlaceholderSelfHash(manifest: ArtifactManifest, manifestFileName: string): ArtifactManifest {
+  return {
+    ...manifest,
+    files: manifest.files.map((file) => file.path === manifestFileName
+      ? { ...file, sha256: { algorithm: "sha256", value: "0".repeat(64) } }
+      : file),
+  }
+}
+
+async function verifyManifestFileHashes(directory: string, manifest: ArtifactManifest, manifestFileName: string, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  for (const [index, file] of manifest.files.entries()) {
+    if (artifactPathViolation(file.path, `manifest.files[${index}].path`)) {
+      continue
+    }
+
+    const fieldPath = `manifest.files[${index}].sha256`
+    if (!isArtifactFileDigestShape(file.sha256)) {
+      violations.push({ code: "missing-file-hash", path: fieldPath, file: file.path, message: `Manifest file entry must include a lowercase SHA-256 digest: ${file.path}` })
+      continue
+    }
+
+    try {
+      const value = await calculateArtifactManifestFileSha256(directory, manifest, file, manifestFileName)
+      if (value !== file.sha256.value) {
+        violations.push({ code: "file-hash-mismatch", path: fieldPath, file: file.path, message: `Manifest file hash does not match ${file.path}: expected ${value}, got ${file.sha256.value}` })
+      }
+    } catch (error) {
+      violations.push({ code: "file-hash-mismatch", path: fieldPath, file: file.path, message: `Unable to hash manifest file entry ${file.path}: ${errorMessage(error)}` })
+    }
+  }
 }
 
 function artifactBundleVerificationResult(bundleDirectory: string, violations: ArtifactBundleVerificationViolation[], manifest?: ArtifactManifest): ArtifactBundleVerificationResult {
@@ -873,6 +933,13 @@ function isArtifactManifestFileShape(value: unknown): value is ArtifactManifestF
     && typeof value.path === "string"
     && typeof value.kind === "string"
     && typeof value.contentType === "string"
+}
+
+function isArtifactFileDigestShape(value: unknown): value is ArtifactFileDigest {
+  return isRecord(value)
+    && value.algorithm === "sha256"
+    && typeof value.value === "string"
+    && /^[a-f0-9]{64}$/.test(value.value)
 }
 
 function artifactPathViolation(path: string, fieldPath: string): ArtifactBundleVerificationViolation | undefined {
@@ -986,6 +1053,38 @@ async function verifyReviewEvidence(directory: string, manifest: ArtifactManifes
   if (typeof evidence.changedFiles === "string") {
     validateArtifactReference(evidence.changedFiles, "files/review.json:evidence.changedFiles", manifestFiles, violations)
     await verifyChangedFileEvidence(directory, evidence.changedFiles, review, violations)
+  }
+
+  if (typeof evidence.runtimeEpisodeTrace === "string") {
+    validateArtifactReference(evidence.runtimeEpisodeTrace, "files/review.json:evidence.runtimeEpisodeTrace", manifestFiles, violations)
+  }
+}
+
+async function verifyRuntimeEpisodeTraceArtifacts(directory: string, manifest: ArtifactManifest, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  for (const file of manifest.files) {
+    if (file.kind !== "runtime-episode-trace") {
+      continue
+    }
+
+    try {
+      const trace = JSON.parse(await readFile(join(directory, file.path), "utf8"))
+      const validation = validateRuntimeEpisodeTrace(trace)
+      if (!validation.valid) {
+        violations.push({
+          code: "malformed-reference",
+          path: file.path,
+          file: file.path,
+          message: `Runtime episode trace is invalid: ${validation.issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")}`,
+        })
+      }
+    } catch (error) {
+      violations.push({
+        code: "malformed-reference",
+        path: file.path,
+        file: file.path,
+        message: `Runtime episode trace is not valid JSON: ${errorMessage(error)}`,
+      })
+    }
   }
 }
 
@@ -1577,6 +1676,69 @@ function snapshotWithSemantics(snapshot: Snapshot): Snapshot {
   return { semantics: "metadata-only", ...snapshot }
 }
 
+function runtimeEpisodeJsonLines(trace: RuntimeEpisodeTrace): string {
+  const records: Array<Record<string, unknown>> = [
+    {
+      type: "episode.reset",
+      id: trace.reset.id,
+      runtime: trace.reset.runtime,
+      observations: trace.reset.observationRefs,
+    },
+    ...trace.steps.map((step) => ({
+      type: "episode.step",
+      id: step.id,
+      index: step.index,
+      actionRef: step.actionRef,
+      executionRef: step.executionRef,
+      ...(step.observationRef ? { observationRef: step.observationRef } : {}),
+    })),
+    ...trace.snapshots.map((snapshot) => ({
+      type: "episode.snapshot",
+      id: snapshot.id,
+      createdAt: snapshot.createdAt,
+      semantics: snapshot.semantics,
+      artifactRefs: snapshot.artifactRefs ?? [],
+    })),
+  ]
+
+  if (trace.artifactRef) {
+    records.push({
+      type: "episode.artifacts",
+      id: trace.artifactRef.id,
+      artifactRef: trace.artifactRef,
+    })
+  }
+
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`
+}
+
+function upsertManifestFile(manifest: ArtifactManifest, file: ArtifactManifestFile): void {
+  const index = manifest.files.findIndex((candidate) => candidate.path === file.path)
+  if (index === -1) {
+    manifest.files.push(file)
+    return
+  }
+
+  manifest.files[index] = file
+}
+
+function artifactManifestFile(path: string, kind: string, contentType: string): ArtifactManifestFile {
+  return { path, kind, contentType, sha256: { algorithm: "sha256", value: "0".repeat(64) } }
+}
+
+async function refreshArtifactManifestFileHashes(directory: string, manifest: ArtifactManifest): Promise<void> {
+  for (const file of manifest.files) {
+    if (file.path !== "manifest.json") {
+      file.sha256 = { algorithm: "sha256", value: await calculateArtifactManifestFileSha256(directory, manifest, file) }
+    }
+  }
+  for (const file of manifest.files) {
+    if (file.path === "manifest.json") {
+      file.sha256 = { algorithm: "sha256", value: await calculateArtifactManifestFileSha256(directory, manifest, file) }
+    }
+  }
+}
+
 export async function createRuntime(spec: RuntimeCreateSpec, backend: RuntimeBackend): Promise<Runtime> {
   assertRuntimePolicy(spec.policy)
 
@@ -1598,6 +1760,7 @@ class RuntimeEpisodeRunner implements RuntimeEpisode {
   private readonly steps: RuntimeEpisodeStepResult[] = []
   private readonly snapshots: Snapshot[] = []
   private artifacts?: ArtifactBundle
+  private traceCreatedAt?: string
 
   private constructor(
     private readonly spec: RuntimeEpisodeSpec,
@@ -1616,6 +1779,7 @@ class RuntimeEpisodeRunner implements RuntimeEpisode {
     this.steps.length = 0
     this.snapshots.length = 0
     this.artifacts = undefined
+    this.traceCreatedAt = undefined
 
     for (const mount of this.spec.mounts ?? []) {
       await this.runtime.mount(mount)
@@ -1680,8 +1844,73 @@ class RuntimeEpisodeRunner implements RuntimeEpisode {
   }
 
   async collectArtifacts(spec: ArtifactSpec = this.spec.artifactSpec ?? {}): Promise<ArtifactBundle> {
-    this.artifacts = await this.assertRuntime().collectArtifacts(spec)
+    const artifacts = await this.assertRuntime().collectArtifacts(spec)
+    this.artifacts = {
+      ...artifacts,
+      runtimeEpisodeTracePath: join(artifacts.directory, "files/runtime-episode-trace.json"),
+      runtimeEpisodeEventsPath: join(artifacts.directory, "files/runtime-episode.jsonl"),
+    }
+    await this.persistRuntimeEpisodeTraceArtifacts()
     return this.artifacts
+  }
+
+  private async persistRuntimeEpisodeTraceArtifacts(): Promise<void> {
+    if (!this.artifacts?.runtimeEpisodeTracePath || !this.artifacts.runtimeEpisodeEventsPath) {
+      return
+    }
+
+    const trace = await this.trace()
+    const traceRelativePath = "files/runtime-episode-trace.json"
+    const eventsRelativePath = "files/runtime-episode.jsonl"
+    await writeFile(this.artifacts.runtimeEpisodeTracePath, `${JSON.stringify(trace, null, 2)}\n`)
+    await writeFile(this.artifacts.runtimeEpisodeEventsPath, `${runtimeEpisodeJsonLines(trace)}`)
+    await this.updateArtifactMetadataForRuntimeEpisodeTrace(traceRelativePath, eventsRelativePath)
+    await this.updateArtifactReviewForRuntimeEpisodeTrace(traceRelativePath)
+    await this.updateArtifactManifestForRuntimeEpisodeTrace(traceRelativePath, eventsRelativePath)
+  }
+
+  private async updateArtifactManifestForRuntimeEpisodeTrace(traceRelativePath: string, eventsRelativePath: string): Promise<void> {
+    if (!this.artifacts) {
+      return
+    }
+
+    const manifest = JSON.parse(await readFile(this.artifacts.manifestPath, "utf8")) as ArtifactManifest
+    upsertManifestFile(manifest, artifactManifestFile(traceRelativePath, "runtime-episode-trace", "application/json"))
+    upsertManifestFile(manifest, artifactManifestFile(eventsRelativePath, "runtime-episode-events", "application/x-ndjson"))
+    await refreshArtifactManifestFileHashes(this.artifacts.directory, manifest)
+    await writeFile(this.artifacts.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+
+  private async updateArtifactMetadataForRuntimeEpisodeTrace(traceRelativePath: string, eventsRelativePath: string): Promise<void> {
+    if (!this.artifacts) {
+      return
+    }
+
+    const metadata = JSON.parse(await readFile(this.artifacts.metadataPath, "utf8")) as Record<string, unknown>
+    metadata.artifacts = {
+      ...(isRecord(metadata.artifacts) ? metadata.artifacts : {}),
+      runtimeEpisodeTrace: traceRelativePath,
+      runtimeEpisodeEvents: eventsRelativePath,
+    }
+    await writeFile(this.artifacts.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`)
+  }
+
+  private async updateArtifactReviewForRuntimeEpisodeTrace(traceRelativePath: string): Promise<void> {
+    if (!this.artifacts) {
+      return
+    }
+
+    const review = JSON.parse(await readFile(this.artifacts.reviewPath, "utf8")) as ArtifactReview
+    review.evidence.runtimeEpisodeTrace = traceRelativePath
+    if (!review.progress.some((event) => event.type === "artifact" && event.component === "runtime-episode")) {
+      review.progress.push({
+        type: "artifact",
+        component: "runtime-episode",
+        label: "Runtime episode trace persisted",
+        timestamp: new Date().toISOString(),
+      })
+    }
+    await writeFile(this.artifacts.reviewPath, `${JSON.stringify(review, null, 2)}\n`)
   }
 
   async trace(): Promise<RuntimeEpisodeTrace> {
@@ -1706,7 +1935,7 @@ class RuntimeEpisodeRunner implements RuntimeEpisode {
       schema: RUNTIME_EPISODE_TRACE_SCHEMA,
       version: 1,
       id: `trace-${reset.runtime.id}`,
-      createdAt: new Date().toISOString(),
+      createdAt: this.traceCreatedAt ??= new Date().toISOString(),
       runtime: await runtime.info(),
       reset,
       steps: [...this.steps],

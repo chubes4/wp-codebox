@@ -10,6 +10,7 @@ import {
   RUNTIME_EPISODE_OBSERVATION_SCHEMA,
   createRuntimeEpisode,
   validateRuntimeEpisodeTrace,
+  verifyArtifactBundle,
 } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
@@ -81,8 +82,26 @@ try {
     const artifacts = await episode.collectArtifacts()
     const metadata = JSON.parse(await readFile(artifacts.metadataPath, "utf8"))
     assert.equal(metadata.provenance.task.kind, "runtime-episode-smoke")
+    assert.ok(artifacts.runtimeEpisodeTracePath, "artifact bundle should expose runtimeEpisodeTracePath")
+    assert.ok(artifacts.runtimeEpisodeEventsPath, "artifact bundle should expose runtimeEpisodeEventsPath")
+    assert.equal(metadata.artifacts.runtimeEpisodeTrace, "files/runtime-episode-trace.json")
+    assert.equal(metadata.artifacts.runtimeEpisodeEvents, "files/runtime-episode.jsonl")
+
+    const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8"))
+    assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode-trace.json" && file.kind === "runtime-episode-trace"))
+    assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode.jsonl" && file.kind === "runtime-episode-events"))
+
+    const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8"))
+    assert.equal(review.evidence.runtimeEpisodeTrace, "files/runtime-episode-trace.json")
+    assert.ok(review.progress.some((event: { component?: string; label?: string }) => event.component === "runtime-episode" && event.label === "Runtime episode trace persisted"))
 
     const trace = await episode.trace()
+    const persistedTrace = JSON.parse(await readFile(artifacts.runtimeEpisodeTracePath, "utf8"))
+    assert.deepEqual(persistedTrace, trace)
+    const persistedEvents = (await readFile(artifacts.runtimeEpisodeEventsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+    assert.equal(persistedEvents.some((event: { type: string }) => event.type === "episode.step"), true)
+    assert.equal(persistedEvents.some((event: { type: string }) => event.type === "episode.artifacts"), true)
+
     assert.equal(RUNTIME_EPISODE_TRACE_JSON_SCHEMA.$id, RUNTIME_EPISODE_TRACE_SCHEMA)
     const validateJsonSchema = new Ajv({ strict: false }).compile(RUNTIME_EPISODE_TRACE_JSON_SCHEMA)
     assert.equal(validateJsonSchema(trace), true, JSON.stringify(validateJsonSchema.errors, null, 2))
@@ -98,6 +117,8 @@ try {
     assert.equal(trace.artifactRef?.digest?.value, artifacts.contentDigest)
     const validation = validateRuntimeEpisodeTrace(trace)
     assert.equal(validation.valid, true, JSON.stringify(validation.issues, null, 2))
+    const artifactVerification = await verifyArtifactBundle(artifacts.directory)
+    assert.equal(artifactVerification.valid, true, JSON.stringify(artifactVerification.violations, null, 2))
     assert.equal(
       validateRuntimeEpisodeTrace({ ...trace, reward: 1 }).valid,
       false,

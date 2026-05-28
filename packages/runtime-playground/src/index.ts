@@ -3,7 +3,7 @@ import { copyFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "n
 import { createServer as createHttpServer, request as httpRequest, type IncomingHttpHeaders, type ServerResponse } from "node:http"
 import { createServer as createNetServer } from "node:net"
 import { basename, dirname, join, relative, resolve } from "node:path"
-import { assertRuntimeCommandAllowed } from "@chubes4/wp-codebox-core"
+import { assertRuntimeCommandAllowed, calculateArtifactManifestFileSha256 } from "@chubes4/wp-codebox-core"
 import {
   MAX_CAPTURED_MOUNT_FILE_BYTES,
   MAX_CAPTURED_MOUNT_FILES,
@@ -498,23 +498,8 @@ class PlaygroundRuntime implements Runtime {
       ),
     ]
 
-    const manifest: ArtifactManifest = {
-      id: bundleId,
-      contentDigest: {
-        algorithm: "sha256",
-        inputs: ["files/changed-files.json", "files/patch.diff"],
-        value: contentDigest,
-      },
-      createdAt,
-      runtime,
-      files: manifestFiles.map((file) => ({
-        ...file,
-        path: relative(this.artifactRoot, file.path),
-      })),
-    }
     metadata.preview = preview
 
-    await writeRedactedArtifact(redactor, manifestPath, this.artifactRoot, `${JSON.stringify(manifest, null, 2)}\n`)
     await writeRedactedArtifact(redactor, blueprintAfterPath, this.artifactRoot, `${JSON.stringify(blueprintAfter, null, 2)}\n`)
     await writeRedactedArtifact(redactor, blueprintAfterNotesPath, this.artifactRoot, `${JSON.stringify(blueprintAfterNotes, null, 2)}\n`)
     await writeJsonLines(eventsPath, this.events, redactor, this.artifactRoot)
@@ -536,6 +521,36 @@ class PlaygroundRuntime implements Runtime {
     await writeRedactedArtifact(redactor, reviewPath, this.artifactRoot, `${JSON.stringify(review, null, 2)}\n`)
     metadata.redaction = redactor.summary()
     await writeRedactedArtifact(redactor, metadataPath, this.artifactRoot, `${JSON.stringify(metadata, null, 2)}\n`)
+
+    const manifest: ArtifactManifest = {
+      id: bundleId,
+      contentDigest: {
+        algorithm: "sha256",
+        inputs: ["files/changed-files.json", "files/patch.diff"],
+        value: contentDigest,
+      },
+      createdAt,
+      runtime,
+      files: manifestFiles.map((file) => ({
+        ...file,
+        path: relative(this.artifactRoot, file.path),
+      })),
+    }
+    manifest.files = await Promise.all(manifest.files.map(async (file) => file.path === "manifest.json" ? file : ({
+      ...file,
+      sha256: {
+        algorithm: "sha256" as const,
+        value: await calculateArtifactManifestFileSha256(this.artifactRoot, manifest, file),
+      },
+    })))
+    manifest.files = await Promise.all(manifest.files.map(async (file) => file.path !== "manifest.json" ? file : ({
+      ...file,
+      sha256: {
+        algorithm: "sha256" as const,
+        value: await calculateArtifactManifestFileSha256(this.artifactRoot, manifest, file),
+      },
+    })))
+    await writeRedactedArtifact(redactor, manifestPath, this.artifactRoot, `${JSON.stringify(manifest, null, 2)}\n`)
 
     return {
       id: bundleId,
