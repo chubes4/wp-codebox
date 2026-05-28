@@ -305,16 +305,33 @@ scenario, benchmark, task-set, and model-eval belong in consumers that project
 the trace into their own schemas.
 
 Episode steps include stable ids and refs for the step, requested action,
-runtime execution, optional observation, and collected artifact bundle. Action
-and execution refs include SHA-256 digests over the canonical trace v1 JSON
-payload so callers can compare command/result records without depending on
+runtime execution, optional observation, and collected artifact bundle. Actions
+use the generic `wp-codebox/runtime-episode-action/v1` envelope with
+`kind: "command"`, a command name, string args, optional `cwd`, optional
+`timeoutMs`, and a SHA-256 digest over that replay payload. Observations use
+the generic `wp-codebox/runtime-episode-observation/v1` envelope with id, type,
+data, timestamp, and digest. Refs carry matching digests so callers can compare
+action args, observations, executions, snapshots, and artifacts without parsing
 presentation logs.
+
+Replay is bounded to the generic runtime contract. A consumer can replay a step
+by creating a compatible backend runtime, applying the same mounts/artifact
+inputs, and executing the action envelope in order. WP Codebox intentionally
+does not record rewards, scenario ids, benchmark metadata, model-eval fields, or
+product-specific success semantics; those belong to the caller's projection of
+the trace. Backend behavior still matters: command availability, WordPress
+version, installed packages, mounted files, network policy, and secrets policy
+must be reproduced by the replay harness.
 
 Runtime snapshots are explicit about their semantics. The current Playground
 backend returns `semantics: "metadata-only"`, which records runtime and mount
 metadata for audit context but is not a full replayable WordPress state image.
-Call `collectArtifacts()` when the caller needs replay inputs, changed files,
-patches, logs, observations, and artifact bundle refs.
+These snapshots are trace markers, not database or filesystem checkpoints. Call
+`collectArtifacts()` when the caller needs replay inputs, changed files, patches,
+logs, observations, and artifact bundle refs. Future backends may emit stronger
+snapshot semantics such as runtime-state artifacts, but replay consumers should
+branch on the snapshot `semantics` field instead of assuming a portable restore
+point.
 
 ## CLI Commands
 
