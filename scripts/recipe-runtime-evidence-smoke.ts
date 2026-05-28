@@ -62,9 +62,44 @@ try {
   assert.equal(failingPolicy.passed, false)
   assert.ok(failingPolicy.checks[0].result.violations.some((violation: { code: string }) => violation.code === "hidden-path"))
 
+  const uncheckedMountRecipe = join(workspace, "unchecked-readwrite-mount.json")
+  const uncheckedMountArtifacts = join(workspace, "unchecked-readwrite-mount-artifacts")
+  await writeRecipeWithUncheckedMount(uncheckedMountRecipe, source, uncheckedMountArtifacts)
+
+  const uncheckedMount = await recipeRun(uncheckedMountRecipe, false)
+  assert.equal(uncheckedMount.success, false)
+  assert.equal(uncheckedMount.error?.code, "workspace-policy-failed")
+  const uncheckedMountPolicy = JSON.parse(await readFile(join(uncheckedMount.artifacts.directory, "files/runtime-evidence/workspace-policy.json"), "utf8"))
+  assert.equal(uncheckedMountPolicy.passed, false)
+  assert.ok(uncheckedMountPolicy.checks.some((check: { workspace: { metadata?: { sourceField?: string } } }) => check.workspace.metadata?.sourceField === "inputs.mounts[0]"))
+
   console.log("Recipe runtime evidence smoke passed")
 } finally {
   await rm(workspace, { recursive: true, force: true })
+}
+
+async function writeRecipeWithUncheckedMount(recipePath: string, source: string, artifacts: string): Promise<void> {
+  await writeFile(recipePath, `${JSON.stringify({
+    schema: "wp-codebox/workspace-recipe/v1",
+    runtime: { wp: "7.0" },
+    inputs: {
+      mounts: [
+        {
+          source,
+          target: "/workspace-unchecked",
+          mode: "readwrite",
+        },
+      ],
+    },
+    workflow: {
+      steps: [{ command: "inspect-mounted-inputs" }],
+    },
+    artifacts: {
+      directory: artifacts,
+      verify: true,
+      workspacePolicy: { strict: true, writableRoots: ["."], gitBacked: false },
+    },
+  }, null, 2)}\n`)
 }
 
 async function writeRecipe(recipePath: string, source: string, artifacts: string, artifactOptions: Record<string, unknown>): Promise<void> {

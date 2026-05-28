@@ -1528,7 +1528,7 @@ async function runRecipe(options: RecipeRunOptions): Promise<RecipeRunOutput> {
     await runtime.observe({ type: "runtime-info" })
     await runtime.observe({ type: "mounts" })
     artifacts = await runtime.collectArtifacts({ includeLogs: true, includeObservations: true, previewHoldSeconds: options.previewHoldSeconds })
-    const evidence = await finalizeRecipeArtifactEvidence(artifacts, recipe, workspaceMounts)
+    const evidence = await finalizeRecipeArtifactEvidence(artifacts, recipe, workspaceMounts, stagedFiles)
     const strictFailure = recipeArtifactEvidenceFailure(evidence)
     const runtimeInfo = options.previewHoldSeconds ? await runtime.info() : undefined
     await releaseRuntime(runtime, options.previewHoldSeconds, () => cleanupRecipePreparedSources(workspaceMounts, extraPlugins, stagedFiles))
@@ -1598,6 +1598,7 @@ async function finalizeRecipeArtifactEvidence(
   artifacts: ArtifactBundle,
   recipe: WorkspaceRecipe,
   workspaceMounts: PreparedWorkspaceMount[],
+  stagedFiles: PreparedStagedFile[],
 ): Promise<RecipeArtifactEvidenceResult> {
   const result: RecipeArtifactEvidenceResult = {}
   const verifier = normalizeArtifactToggle(recipe.artifacts?.verify)
@@ -1613,7 +1614,7 @@ async function finalizeRecipeArtifactEvidence(
   const evidenceFiles: RecipeArtifactEvidenceFile[] = []
   if (workspacePolicy.enabled) {
     const workspacePolicyPath = join(evidenceDirectory, "workspace-policy.json")
-    const policyResult = await buildRecipeWorkspacePolicyResult(workspaceMounts, workspacePolicy)
+    const policyResult = await buildRecipeWorkspacePolicyResult(recipe, workspaceMounts, stagedFiles, workspacePolicy)
     const policyFile = await writeRecipeEvidenceJson(artifacts.directory, workspacePolicyPath, policyResult, "workspace-policy-result")
     artifacts.workspacePolicyPath = workspacePolicyPath
     evidenceFiles.push(policyFile)
@@ -1714,7 +1715,9 @@ function normalizeWorkspacePolicyArtifact(value: boolean | { enabled?: boolean; 
 }
 
 async function buildRecipeWorkspacePolicyResult(
+  recipe: WorkspaceRecipe,
   workspaceMounts: PreparedWorkspaceMount[],
+  stagedFiles: PreparedStagedFile[],
   policy: { writableRoots: string[]; hiddenPaths: string[]; gitBacked: boolean },
 ): Promise<RecipeWorkspacePolicyArtifactResult> {
   const checks = []
@@ -1734,10 +1737,44 @@ async function buildRecipeWorkspacePolicyResult(
     })
   }
 
+  for (const [index, mount] of (recipe.inputs?.mounts ?? []).entries()) {
+    if ((mount.mode ?? "readwrite") !== "readwrite") {
+      continue
+    }
+    checks.push(uncheckedReadwriteInputPolicyCheck(`inputs.mounts[${index}]`, mount.target, mount.metadata))
+  }
+
+  for (const [index, stagedFile] of stagedFiles.entries()) {
+    checks.push(uncheckedReadwriteInputPolicyCheck(`inputs.stagedFiles[${index}]`, stagedFile.target, stagedFile.metadata))
+  }
+
   return {
     schema: "wp-codebox/workspace-policy-artifacts/v1",
     passed: checks.every((check) => check.result.passed),
     checks,
+  }
+}
+
+function uncheckedReadwriteInputPolicyCheck(sourceField: string, target: string, metadata?: Record<string, unknown>): RecipeWorkspacePolicyArtifactResult["checks"][number] {
+  return {
+    workspace: {
+      target,
+      mode: "readwrite",
+      metadata: { ...(metadata ?? {}), sourceField },
+    },
+    result: {
+      schema: "wp-codebox/workspace-policy-result/v1",
+      passed: false,
+      policy_sha256: createHash("sha256").update(JSON.stringify({ sourceField, target })).digest("hex"),
+      violations: [
+        {
+          code: "path-outside-workspace",
+          path: target,
+          message: `${sourceField} is mounted readwrite but is not a declared workspace policy root. Use inputs.workspaces for policy-checked writable sources or make the mount readonly.`,
+          details: { sourceField, target },
+        },
+      ],
+    },
   }
 }
 
