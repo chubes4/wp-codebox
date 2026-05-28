@@ -1,6 +1,9 @@
 {
   "id": "wp-codebox",
-  "build_artifact": "dist/wp-codebox-cli-linux-x64.tar.gz",
+  "extensions": {
+    "nodejs": {}
+  },
+  "build_artifact": "packages/wordpress-plugin/dist/wp-codebox.zip",
   "version_targets": [
     {
       "file": "package.json",

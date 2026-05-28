@@ -8,8 +8,8 @@ const execFileAsync = promisify(execFile)
 const repoRoot = resolve(import.meta.dirname, "..")
 const releaseRoot = resolve(repoRoot, "dist", "release")
 const packageRoot = join(releaseRoot, "wp-codebox-cli")
-const platformName = normalizePlatform(platform())
-const archName = normalizeArch(arch())
+const platformName = process.env.WP_CODEBOX_RELEASE_PLATFORM ?? normalizePlatform(platform())
+const archName = process.env.WP_CODEBOX_RELEASE_ARCH ?? normalizeArch(arch())
 const artifactName = `wp-codebox-cli-${platformName}-${archName}.tar.gz`
 const artifactPath = resolve(repoRoot, "dist", artifactName)
 
