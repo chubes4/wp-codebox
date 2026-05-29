@@ -48,6 +48,12 @@ assert.ok(zipEntries.has("wp-codebox/README.md"), "Plugin zip should include REA
 assert.ok(zipEntries.has("wp-codebox/src/class-wp-codebox-abilities.php"), "Plugin zip should include ability surface")
 assert.ok(zipEntries.has("wp-codebox/src/class-wp-codebox-agent-sandbox-runner.php"), "Plugin zip should include sandbox runner")
 assert.ok(zipEntries.has("wp-codebox/src/class-wp-codebox-artifacts.php"), "Plugin zip should include artifact helpers")
+assert.ok(zipEntries.has("wp-codebox/vendor/wp-codebox-cli/bin/wp-codebox"), "Plugin zip should include packaged CLI wrapper")
+assert.ok(
+  zipEntries.has("wp-codebox/vendor/wp-codebox-cli/vendor/node/bin/node"),
+  "Plugin zip should include packaged Node runtime for the plugin CLI path",
+)
+assert.ok(zipEntries.has("wp-codebox/vendor/wp-codebox-cli/packages/cli/dist/index.js"), "Plugin zip should include compiled CLI runtime")
 assert.equal(zipEntries.has("wp-codebox/package.json"), false, "Plugin zip should not include package metadata")
 assert.equal(zipEntries.has("wp-codebox/dist/wp-codebox.zip"), false, "Plugin zip should not include generated artifacts")
 

@@ -122,6 +122,11 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			return new WP_Error( 'wp_codebox_bin_invalid', 'wp_codebox_bin must be a command name or path without shell metacharacters.', array( 'status' => 400 ) );
 		}
 
+		$command_prefix = $this->command_prefix( $bin );
+		if ( is_wp_error( $command_prefix ) ) {
+			return $command_prefix;
+		}
+
 		$preview_args = $this->preview_args( $input );
 		if ( is_wp_error( $preview_args ) ) {
 			return $preview_args;
@@ -135,7 +140,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 		$command = sprintf(
 			'%s recipe-run --recipe %s --artifacts %s --json',
-			$this->command_prefix( $bin ),
+			$command_prefix,
 			escapeshellarg( $recipe_file ),
 			escapeshellarg( $artifacts )
 		);
@@ -1426,12 +1431,89 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 		return $normalized;
 	}
 
-	private function command_prefix( string $bin ): string {
+	private function command_prefix( string $bin ): string|WP_Error {
 		if ( str_ends_with( $bin, '.js' ) && is_file( $bin ) ) {
-			return 'node ' . escapeshellarg( $bin );
+			$node = $this->node_binary();
+			if ( is_wp_error( $node ) ) {
+				return $node;
+			}
+
+			return escapeshellarg( $node ) . ' ' . escapeshellarg( $bin );
+		}
+
+		if ( $this->is_bundled_cli_wrapper( $bin ) ) {
+			$node = $this->node_binary();
+			if ( is_wp_error( $node ) ) {
+				return $node;
+			}
 		}
 
 		return escapeshellarg( $bin );
+	}
+
+	private function node_binary(): string|WP_Error {
+		$configured = trim( (string) ( getenv( 'WP_CODEBOX_NODE_BIN' ) ?: '' ) );
+		if ( '' !== $configured ) {
+			if ( is_file( $configured ) && is_executable( $configured ) ) {
+				return $configured;
+			}
+
+			return new WP_Error( 'wp_codebox_node_runtime_unavailable', 'WP_CODEBOX_NODE_BIN is configured but is not an executable file.', array( 'status' => 500, 'path' => $configured ) );
+		}
+
+		$bundled = $this->bundled_node_binary();
+		if ( '' !== $bundled ) {
+			return $bundled;
+		}
+
+		foreach ( array( 'node', 'nodejs' ) as $command ) {
+			$resolved = $this->resolve_command( $command );
+			if ( '' !== $resolved ) {
+				return $resolved;
+			}
+		}
+
+		return new WP_Error(
+			'wp_codebox_node_runtime_unavailable',
+			'WP Codebox could not find an executable Node.js runtime. Use the packaged plugin with vendor/wp-codebox-cli/vendor/node/bin/node, set WP_CODEBOX_NODE_BIN, or install node on PATH.',
+			array( 'status' => 500 )
+		);
+	}
+
+	private function bundled_node_binary(): string {
+		if ( ! defined( 'WP_CODEBOX_PLUGIN_PATH' ) ) {
+			return '';
+		}
+
+		$path = WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/vendor/node/bin/node';
+		return is_file( $path ) && is_executable( $path ) ? $path : '';
+	}
+
+	private function is_bundled_cli_wrapper( string $bin ): bool {
+		if ( ! defined( 'WP_CODEBOX_PLUGIN_PATH' ) ) {
+			return false;
+		}
+
+		return $bin === WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/bin/wp-codebox';
+	}
+
+	private function resolve_command( string $command ): string {
+		if ( isset( $this->callbacks['command_resolver'] ) ) {
+			$resolved = ( $this->callbacks['command_resolver'] )( $command );
+			return is_string( $resolved ) ? $resolved : '';
+		}
+
+		if ( ! function_exists( 'exec' ) ) {
+			return '';
+		}
+
+		$output = array();
+		$exit   = 1;
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Used for executable preflight only.
+		exec( 'command -v ' . escapeshellarg( $command ) . ' 2>/dev/null', $output, $exit );
+		$resolved = 0 === $exit && ! empty( $output[0] ) ? (string) $output[0] : '';
+
+		return '' !== $resolved && is_executable( $resolved ) ? $resolved : '';
 	}
 
 	/**

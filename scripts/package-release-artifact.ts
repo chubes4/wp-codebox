@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
-import { chmod, cp, mkdir, rm, writeFile } from "node:fs/promises"
+import { chmod, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { arch, platform } from "node:os"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 
@@ -10,6 +11,7 @@ const releaseRoot = resolve(repoRoot, "dist", "release")
 const packageRoot = join(releaseRoot, "wp-codebox-cli")
 const platformName = process.env.WP_CODEBOX_RELEASE_PLATFORM ?? normalizePlatform(platform())
 const archName = process.env.WP_CODEBOX_RELEASE_ARCH ?? normalizeArch(arch())
+const nodeRuntimeVersion = process.env.WP_CODEBOX_NODE_RUNTIME_VERSION ?? "24.16.0"
 const artifactName = `wp-codebox-cli-${platformName}-${archName}.tar.gz`
 const artifactPath = resolve(repoRoot, "dist", artifactName)
 
@@ -35,11 +37,29 @@ await execFileAsync("npm", ["install", "--omit=dev", "--omit=optional", "--ignor
   cwd: packageRoot,
   maxBuffer: 1024 * 1024 * 20,
 })
+await bundleNodeRuntime(packageRoot, platformName, archName)
 
 const binDir = join(packageRoot, "bin")
 await mkdir(binDir, { recursive: true })
 const binPath = join(binDir, "wp-codebox")
-await writeFile(binPath, "#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\nexec node \"${SCRIPT_DIR}/../packages/cli/dist/index.js\" \"$@\"\n")
+await writeFile(binPath, `#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+NODE_BIN="\${WP_CODEBOX_NODE_BIN:-}"
+if [ -z "\${NODE_BIN}" ]; then
+	if [ -x "\${SCRIPT_DIR}/../vendor/node/bin/node" ]; then
+		NODE_BIN="\${SCRIPT_DIR}/../vendor/node/bin/node"
+	elif command -v node >/dev/null 2>&1; then
+		NODE_BIN="$(command -v node)"
+	elif command -v nodejs >/dev/null 2>&1; then
+		NODE_BIN="$(command -v nodejs)"
+	else
+		echo "WP Codebox could not find a Node.js runtime. Bundle vendor/node/bin/node, set WP_CODEBOX_NODE_BIN, or install node on PATH." >&2
+		exit 127
+	fi
+fi
+exec "\${NODE_BIN}" "\${SCRIPT_DIR}/../packages/cli/dist/index.js" "$@"
+`)
 await chmod(binPath, 0o755)
 
 await execFileAsync("tar", ["-czf", artifactPath, "-C", releaseRoot, "wp-codebox-cli"], {
@@ -57,6 +77,50 @@ async function copyIfPresent(relativePath: string): Promise<void> {
       throw error
     }
   }
+}
+
+async function bundleNodeRuntime(root: string, platformName: string, archName: string): Promise<void> {
+  const nodePackageName = nodeRuntimePackageName(platformName, archName)
+  const runtimeRoot = join(root, "vendor", "node")
+  await rm(runtimeRoot, { recursive: true, force: true })
+  await mkdir(join(runtimeRoot, "bin"), { recursive: true })
+
+  if (nodePackageName) {
+    const tempRoot = await mkdtemp(join(tmpdir(), "wp-codebox-node-runtime-"))
+    try {
+      const { stdout } = await execFileAsync(
+        "npm",
+        ["pack", `${nodePackageName}@${nodeRuntimeVersion}`, "--pack-destination", tempRoot, "--json"],
+        { cwd: repoRoot, maxBuffer: 1024 * 1024 * 20 },
+      )
+      const [packed] = JSON.parse(stdout) as Array<{ filename: string }>
+      const tarball = join(tempRoot, packed.filename)
+      await execFileAsync("tar", ["-xzf", tarball, "-C", tempRoot, "package/bin/node"], {
+        cwd: repoRoot,
+        maxBuffer: 1024 * 1024 * 10,
+      })
+      await cp(join(tempRoot, "package", "bin", "node"), join(runtimeRoot, "bin", "node"))
+      await chmod(join(runtimeRoot, "bin", "node"), 0o755)
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true })
+    }
+  } else if (platformName === normalizePlatform(platform()) && archName === normalizeArch(arch())) {
+    await cp(process.execPath, join(runtimeRoot, "bin", "node"))
+    await chmod(join(runtimeRoot, "bin", "node"), 0o755)
+  } else {
+    await writeFile(
+      join(runtimeRoot, "README.md"),
+      `No bundled Node.js runtime is available for ${platformName}-${archName}. Set WP_CODEBOX_NODE_BIN or install node on PATH.\n`,
+    )
+  }
+}
+
+function nodeRuntimePackageName(platformName: string, archName: string): string | null {
+  if (platformName === "linux" && (archName === "x64" || archName === "arm64")) {
+    return `node-linux-${archName}`
+  }
+
+  return null
 }
 
 function normalizePlatform(value: NodeJS.Platform): string {
