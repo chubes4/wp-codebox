@@ -52,6 +52,7 @@
     "preview-response-body-smoke": "tsx scripts/preview-response-body-smoke.ts",
     "boot-preview-smoke": "tsx scripts/boot-preview-smoke.ts",
     "blueprint-validation-smoke": "tsx scripts/blueprint-validation-smoke.ts",
+    "ability-login-blueprint-smoke": "tsx scripts/ability-login-blueprint-smoke.ts",
     "discovery-command-smoke": "tsx scripts/discovery-command-smoke.ts",
     "agent-sandbox-code-smoke": "tsx scripts/agent-sandbox-code-smoke.ts",
     "recipe-dry-run-smoke": "tsx scripts/recipe-dry-run-smoke.ts",

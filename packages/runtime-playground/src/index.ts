@@ -1366,6 +1366,7 @@ class PlaygroundRuntime implements Runtime {
 
   private bootstrapAbilityPhpCode(code: string): string {
     return `<?php
+define( 'REST_REQUEST', true );
 $_SERVER['REQUEST_URI'] = '/wp-json/wp-codebox/ability';
 require_once '/wordpress/wp-load.php';
 ${this.secretEnvPhp()}
