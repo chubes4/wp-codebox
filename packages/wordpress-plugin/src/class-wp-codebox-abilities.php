@@ -1030,11 +1030,18 @@ final class WP_Codebox_Abilities {
 
 	/** @param array<string,mixed> $blueprint Blueprint override. @param array<int,array<string,mixed>> $plugins Browser plugins. @return array<string,mixed> */
 	private static function browser_blueprint_with_plugins( array $blueprint, array $plugins, array $playground = array() ): array {
-		if ( empty( $plugins ) ) {
-			return $blueprint;
+		$steps = is_array( $blueprint['steps'] ?? null ) ? $blueprint['steps'] : array();
+		if ( ! self::browser_blueprint_has_login_step( $steps ) ) {
+			array_unshift(
+				$steps,
+				array(
+					'step'     => 'login',
+					'username' => 'admin',
+					'password' => 'password',
+				)
+			);
 		}
 
-		$steps = is_array( $blueprint['steps'] ?? null ) ? $blueprint['steps'] : array();
 		foreach ( $plugins as $plugin ) {
 			$steps[] = array(
 				'step'       => 'installPlugin',
@@ -1060,6 +1067,17 @@ final class WP_Codebox_Abilities {
 		}
 
 		return $blueprint;
+	}
+
+	/** @param array<int,mixed> $steps Blueprint steps. */
+	private static function browser_blueprint_has_login_step( array $steps ): bool {
+		foreach ( $steps as $step ) {
+			if ( is_array( $step ) && 'login' === (string) ( $step['step'] ?? '' ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/** @param array<string,mixed> $task_input Normalized task input. @param array<string,mixed> $runner Runner overrides. @return array<string,mixed>|WP_Error */
