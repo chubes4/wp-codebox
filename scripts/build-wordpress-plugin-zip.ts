@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -28,10 +28,22 @@ try {
 	await cp(join(pluginSource, "wp-codebox.php"), join(stagingPlugin, "wp-codebox.php"))
 	await cp(join(pluginSource, "README.md"), join(stagingPlugin, "README.md"))
 	await cp(join(pluginSource, "src"), join(stagingPlugin, "src"), { recursive: true })
+	if (await exists(join(pluginSource, "assets"))) {
+		await cp(join(pluginSource, "assets"), join(stagingPlugin, "assets"), { recursive: true })
+	}
 	await cp(cliPackageRoot, join(stagingPlugin, "vendor", "wp-codebox-cli"), { recursive: true })
 	await rm(outputZip, { force: true })
   await execFileAsync("zip", ["-qr", outputZip, "wp-codebox"], { cwd: stagingRoot })
   console.log(`Built ${outputZip}`)
 } finally {
   await rm(stagingRoot, { recursive: true, force: true })
+}
+
+async function exists(path: string): Promise<boolean> {
+	try {
+		await stat(path)
+		return true
+	} catch {
+		return false
+	}
 }
