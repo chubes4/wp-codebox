@@ -96,8 +96,32 @@ try {
     assert.equal(semanticHttpAction.actionRef.digest?.value, semanticHttpAction.action.digest.value)
     assert.equal(semanticHttpAction.executionRef.id, semanticHttpAction.execution.id)
     assert.equal(semanticHttpAction.observation?.type, "wordpress-state")
-    assert.equal(typeof (semanticHttpAction.observation?.data as { wordpressVersion?: unknown }).wordpressVersion, "string")
+    assert.equal((semanticHttpAction.observation?.data as { schema?: string }).schema, "wp-codebox/wordpress-state-export/v1")
+    assert.equal(typeof (((semanticHttpAction.observation?.data as { sections?: { summary?: { wordpressVersion?: unknown } } }).sections?.summary?.wordpressVersion)), "string")
+    assert.equal(semanticHttpAction.observation?.artifactRefs?.[0].kind, "wordpress-state-section")
     assert.equal(semanticHttpAction.observationRef?.digest?.value, semanticHttpAction.observation?.digest?.value)
+
+    const fullStateObservation = await episode.observe({
+      type: "wordpress-state",
+      sections: ["summary", "posts", "terms", "options", "users", "rest-routes", "abilities"],
+      optionNames: ["blogname"],
+      userFields: ["user_login", "roles"],
+    })
+    const fullStateData = fullStateObservation.data as {
+      config?: { sections?: string[] }
+      sections?: { posts?: { count?: number }; users?: { count?: number }; options?: { keys?: string[] } }
+      artifacts?: Record<string, { artifact?: string; sha256?: string; bytes?: number }>
+    }
+    assert.deepEqual(fullStateData.config?.sections, ["summary", "posts", "terms", "options", "users", "rest-routes", "abilities"])
+    assert.ok((fullStateData.sections?.posts?.count ?? 0) >= 2)
+    assert.equal(fullStateData.sections?.users?.count, 1)
+    assert.deepEqual(fullStateData.sections?.options?.keys, ["blogname"])
+    assert.match(fullStateData.artifacts?.posts?.sha256 ?? "", /^[a-f0-9]{64}$/)
+    assert.equal(fullStateObservation.artifactRefs?.some((ref) => ref.kind === "wordpress-state-section" && ref.path?.endsWith("wordpress-state-users.json")), true)
+
+    const usersArtifactRef = fullStateObservation.artifactRefs?.find((ref) => ref.path?.endsWith("wordpress-state-users.json"))
+    assert.ok(usersArtifactRef?.path, "users state export should be artifact-backed")
+    const usersArtifactPath = usersArtifactRef.path
 
     const httpObservation = await episode.observe({ type: "http-response", url: "/" })
     assert.equal(httpObservation.type, "http-response")
@@ -129,10 +153,16 @@ try {
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode-trace.json" && file.kind === "runtime-episode-trace"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode.jsonl" && file.kind === "runtime-episode-events"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === httpObservation.artifactRefs?.[0].path && file.kind === "observation-artifact"))
+    assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === usersArtifactPath && file.kind === "wordpress-state-section"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-reference-manifest.json" && file.kind === "runtime-reference-manifest"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-replay-index.json" && file.kind === "runtime-replay-index"))
     const snapshotBundleEntry = manifest.files.find((file: { path: string; kind: string }) => file.path.startsWith("files/runtime-snapshots/") && file.kind === "runtime-snapshot-bundle")
     assert.ok(snapshotBundleEntry, "runtime snapshot bundle should be listed in manifest")
+
+    const usersArtifact = JSON.parse(await readFile(join(artifacts.directory, usersArtifactPath), "utf8")) as { data?: Array<Record<string, unknown>> }
+    assert.equal(usersArtifact.data?.[0]?.redacted, true)
+    assert.equal(Object.hasOwn(usersArtifact.data?.[0] ?? {}, "user_login"), false)
+    assert.deepEqual(usersArtifact.data?.[0]?.roles, ["administrator"])
 
     const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8"))
     assert.equal(review.evidence.runtimeEpisodeTrace, "files/runtime-episode-trace.json")

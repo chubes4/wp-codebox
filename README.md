@@ -365,6 +365,30 @@ payloads can be stored as bundle-relative artifacts and referenced by digest.
 Refs carry matching digests so callers can compare action args, observations,
 executions, snapshots, and artifacts without parsing presentation logs.
 
+`wordpress-state` is a generic WordPress runtime state export with schema
+`wp-codebox/wordpress-state-export/v1`. The default request remains small and
+safe: `{ type: "wordpress-state" }` exports the summary section only, including
+site/home URLs, WordPress version, active theme/plugins, and post counts. Callers
+that need richer evidence can pass a section allowlist:
+
+```ts
+await episode.observe({
+  type: "wordpress-state",
+  sections: ["summary", "posts", "terms", "menus", "templates", "media", "options", "users", "rest-routes", "abilities"],
+  optionNames: ["blogname", "permalink_structure"],
+  userFields: ["roles"],
+})
+```
+
+Each exported section is written as a bundle-relative artifact under
+`files/observations/`, with a SHA-256 digest in both the observation data and the
+observation `artifactRefs`. The inline observation data summarizes non-summary
+sections by count/key metadata so traces stay compact. Posts include content
+hashes by default; pass `includeContent: true` only when full post content is
+needed. Options require `optionNames`; users are redacted by default, expose only
+allowed role/capability fields, and include identity fields only with
+`redaction: "none"` plus an explicit `userFields` allowlist.
+
 Replay is bounded to the generic runtime contract. A consumer can replay a step
 by creating a compatible backend runtime, applying the same mounts/artifact
 inputs, and executing the action envelope in order. WP Codebox intentionally
