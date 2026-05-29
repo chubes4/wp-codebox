@@ -211,6 +211,7 @@ interface BrowserProbeArtifact {
   requestedUrl: string
   url: string
   files: {
+    actions?: string
     console?: string
     errors?: string
     html?: string
@@ -219,6 +220,7 @@ interface BrowserProbeArtifact {
     summary: string
   }
   summary: {
+    actions?: number
     consoleMessages: number
     errors: number
     finalUrl: string
@@ -240,6 +242,22 @@ interface BrowserProbeViewport {
 }
 
 type BrowserProbeReplayability = "artifact-backed" | "partial" | "diagnostic-only"
+
+interface BrowserActionRecord {
+  index: number
+  type: string
+  status: "ok" | "failed"
+  startedAt: string
+  finishedAt: string
+  url?: string
+  selector?: string
+  text?: string
+  key?: string
+  waitFor?: string
+  duration?: string
+  finalUrl?: string
+  error?: BrowserProbeErrorRecord
+}
 
 interface PluginCheckArtifact {
   targetPlugin: string
@@ -313,6 +331,7 @@ class PlaygroundRuntime implements Runtime {
     "wordpress.core-phpunit": (runtime, spec) => runtime.runCorePhpunit(spec),
     "wordpress.theme-check": (runtime, spec) => runtime.runThemeCheck(spec),
     "wordpress.browser-probe": (runtime, spec) => runtime.runBrowserProbe(spec),
+    "wordpress.browser-actions": (runtime, spec) => runtime.runBrowserActions(spec),
   } satisfies Record<PlaygroundRuntimeCommandId, (runtime: PlaygroundRuntime, spec: ExecutionSpec) => Promise<string> | string>
 
   private status: RuntimeInfo["status"] = "created"
@@ -891,6 +910,173 @@ class PlaygroundRuntime implements Runtime {
       finalUrl: this.browserProbes.at(-1)?.summary.finalUrl ?? targetUrl,
       files: this.browserProbes.at(-1)?.files,
       summary: this.browserProbes.at(-1)?.summary,
+    }, null, 2)}\n`
+  }
+
+  private async runBrowserActions(spec: ExecutionSpec): Promise<string> {
+    const server = await this.bootPlayground()
+    const args = spec.args ?? []
+    const actions = browserActionsFromArgs(args)
+    const initialUrl = argValue(args, "url")?.trim()
+    if (actions.length === 0 && !initialUrl) {
+      throw new Error("wordpress.browser-actions requires actions-json=<array> or url=<path-or-url>")
+    }
+
+    if (initialUrl && actions[0]?.type !== "navigate") {
+      actions.unshift({ type: "navigate", url: initialUrl })
+    }
+
+    const capture = new Set(commaListArg(args, "capture"))
+    if (capture.size === 0) {
+      capture.add("actions")
+      capture.add("console")
+      capture.add("errors")
+      capture.add("network")
+      capture.add("html")
+      capture.add("screenshot")
+    }
+
+    for (const item of capture) {
+      if (!["actions", "console", "errors", "html", "network", "screenshot"].includes(item)) {
+        throw new Error(`wordpress.browser-actions capture supports actions, console, errors, html, network, screenshot: ${item}`)
+      }
+    }
+
+    const browserDirectory = join(this.artifactRoot, "files", "browser")
+    await mkdir(browserDirectory, { recursive: true })
+
+    const actionRecords: BrowserActionRecord[] = []
+    const consoleMessages: Record<string, unknown>[] = []
+    const errors: BrowserProbeErrorRecord[] = []
+    const network: BrowserProbeNetworkRecord[] = []
+    const actionsPath = join(browserDirectory, "actions.jsonl")
+    const consolePath = join(browserDirectory, "console.jsonl")
+    const errorsPath = join(browserDirectory, "errors.jsonl")
+    const htmlPath = join(browserDirectory, "snapshot.html")
+    const networkPath = join(browserDirectory, "network.jsonl")
+    const screenshotPath = join(browserDirectory, "screenshot.png")
+    const summaryPath = join(browserDirectory, "action-summary.json")
+    const startedAt = now()
+    const { chromium } = await import("playwright")
+    const browser = await chromium.launch()
+    let requestedUrl = initialUrl ? resolveBrowserProbeUrl(initialUrl, server.serverUrl) : server.serverUrl
+    let finalUrl = requestedUrl
+    let htmlSha256: string | undefined
+    let screenshotSha256: string | undefined
+    let viewport: BrowserProbeViewport | null = null
+    let pendingError: Error | undefined
+
+    try {
+      const page = await browser.newPage()
+      viewport = await browserProbeViewport(page)
+      if (capture.has("console")) {
+        page.on("console", (message) => consoleMessages.push(serializeBrowserConsoleMessage(message)))
+      }
+      if (capture.has("errors")) {
+        page.on("pageerror", (error) => errors.push(serializeBrowserError("pageerror", error)))
+      }
+      if (capture.has("network")) {
+        page.on("response", (response) => network.push(serializeBrowserResponse(response)))
+        page.on("requestfailed", (request) => network.push(serializeBrowserRequestFailure(request)))
+      }
+
+      for (const [index, action] of actions.entries()) {
+        const recordStartedAt = now()
+        try {
+          await executeBrowserAction(page, action, server.serverUrl)
+          finalUrl = page.url()
+          if (action.type === "navigate") {
+            requestedUrl = resolveBrowserActionUrl(action, server.serverUrl)
+          }
+          actionRecords.push(browserActionRecord(index, action, "ok", recordStartedAt, finalUrl))
+        } catch (error) {
+          const serialized = serializeBrowserError("probe-error", error)
+          errors.push(serialized)
+          actionRecords.push(browserActionRecord(index, action, "failed", recordStartedAt, page.url(), serialized))
+          pendingError = error instanceof Error ? error : new Error(String(error))
+          break
+        }
+      }
+
+      if (capture.has("html")) {
+        const html = await page.content()
+        await writeFile(htmlPath, html)
+        htmlSha256 = sha256(Buffer.from(html, "utf8"))
+      }
+
+      if (capture.has("screenshot")) {
+        await page.screenshot({ path: screenshotPath, fullPage: true })
+        screenshotSha256 = await fileSha256(screenshotPath)
+      }
+    } finally {
+      await browser.close()
+      if (capture.has("actions")) {
+        await writeFile(actionsPath, jsonLines(actionRecords))
+      }
+      if (capture.has("console")) {
+        await writeFile(consolePath, jsonLines(consoleMessages))
+      }
+      if (capture.has("errors")) {
+        await writeFile(errorsPath, jsonLines(errors))
+      }
+      if (capture.has("network")) {
+        await writeFile(networkPath, jsonLines(network))
+      }
+
+      const artifact: BrowserProbeArtifact = {
+        requestedUrl,
+        url: requestedUrl,
+        files: {
+          ...(capture.has("actions") ? { actions: "files/browser/actions.jsonl" } : {}),
+          ...(capture.has("console") ? { console: "files/browser/console.jsonl" } : {}),
+          ...(capture.has("errors") ? { errors: "files/browser/errors.jsonl" } : {}),
+          ...(capture.has("html") ? { html: "files/browser/snapshot.html" } : {}),
+          ...(capture.has("network") ? { network: "files/browser/network.jsonl" } : {}),
+          ...(capture.has("screenshot") ? { screenshot: "files/browser/screenshot.png" } : {}),
+          summary: "files/browser/action-summary.json",
+        },
+        summary: {
+          actions: actionRecords.length,
+          consoleMessages: consoleMessages.length,
+          errors: errors.length,
+          finalUrl,
+          htmlSnapshot: capture.has("html"),
+          networkEvents: network.length,
+          replayability: browserProbeReplayability(capture),
+          screenshot: capture.has("screenshot"),
+          viewport,
+        },
+      }
+      this.browserProbes.push(artifact)
+      await writeFile(summaryPath, `${JSON.stringify({
+        schema: "wp-codebox/browser-actions/v1",
+        requestedUrl,
+        finalUrl,
+        capture: [...capture].sort(),
+        actions: actionRecords,
+        startedAt,
+        finishedAt: now(),
+        files: artifact.files,
+        hashes: {
+          ...(htmlSha256 ? { html: { algorithm: "sha256", value: htmlSha256 } } : {}),
+          ...(screenshotSha256 ? { screenshot: { algorithm: "sha256", value: screenshotSha256 } } : {}),
+        },
+        viewport,
+        summary: artifact.summary,
+      }, null, 2)}\n`)
+    }
+
+    if (pendingError) {
+      throw new Error(`wordpress.browser-actions failed after ${actionRecords.length} action(s): ${pendingError.message}`)
+    }
+
+    return `${JSON.stringify({
+      command: "wordpress.browser-actions",
+      requestedUrl,
+      finalUrl: this.browserProbes.at(-1)?.summary.finalUrl ?? finalUrl,
+      files: this.browserProbes.at(-1)?.files,
+      summary: this.browserProbes.at(-1)?.summary,
+      actions: actionRecords,
     }, null, 2)}\n`
   }
 
@@ -1514,8 +1700,9 @@ echo wp_json_encode( array(
     const consoleMessages = this.browserProbes.reduce((total, probe) => total + probe.summary.consoleMessages, 0)
     const errors = this.browserProbes.reduce((total, probe) => total + probe.summary.errors, 0)
     const screenshots = this.browserProbes.filter((probe) => probe.summary.screenshot).length
+    const actions = this.browserProbes.reduce((total, probe) => total + (probe.summary.actions ?? 0), 0)
     return {
-      summary: `Browser probe captured ${consoleMessages} console message${consoleMessages === 1 ? "" : "s"}, ${errors} error${errors === 1 ? "" : "s"}, and ${screenshots} screenshot${screenshots === 1 ? "" : "s"}.`,
+      summary: `Browser evidence captured ${actions} action${actions === 1 ? "" : "s"}, ${consoleMessages} console message${consoleMessages === 1 ? "" : "s"}, ${errors} error${errors === 1 ? "" : "s"}, and ${screenshots} screenshot${screenshots === 1 ? "" : "s"}.`,
       probes: this.browserProbes.map((probe) => ({
         url: probe.url,
         requestedUrl: probe.requestedUrl,
@@ -1530,6 +1717,9 @@ echo wp_json_encode( array(
         screenshot: probe.files.screenshot,
         console: probe.files.console,
         errorsFile: probe.files.errors,
+        actions: probe.files.actions,
+        actionCount: probe.summary.actions,
+        summaryFile: probe.files.summary,
       })),
     }
   }
@@ -1541,6 +1731,9 @@ echo wp_json_encode( array(
 
     const files = new Map<string, { kind: string; contentType: string }>()
     for (const probe of this.browserProbes) {
+      if (probe.files.actions) {
+        files.set(probe.files.actions, { kind: "browser-actions", contentType: "application/x-ndjson" })
+      }
       if (probe.files.console) {
         files.set(probe.files.console, { kind: "browser-console", contentType: "application/x-ndjson" })
       }
@@ -1579,7 +1772,7 @@ echo wp_json_encode( array(
 
   private async redactBrowserArtifacts(redactor: ArtifactRedactor): Promise<void> {
     for (const probe of this.browserProbes) {
-      for (const path of [probe.files.console, probe.files.errors, probe.files.html, probe.files.network, probe.files.summary]) {
+      for (const path of [probe.files.actions, probe.files.console, probe.files.errors, probe.files.html, probe.files.network, probe.files.summary]) {
         if (!path) {
           continue
         }
@@ -1662,6 +1855,145 @@ async function navigateBrowserProbe(page: Page, url: string, waitFor: string, du
   }
 
   throw new Error(`wordpress.browser-probe wait-for supports domcontentloaded, load, networkidle, selector:<selector>, duration: ${waitFor}`)
+}
+
+type BrowserActionInput = Record<string, unknown> & { type: string }
+
+function browserActionsFromArgs(args: string[]): BrowserActionInput[] {
+  return jsonArrayArg(args, "actions-json").map((action, index) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) {
+      throw new Error(`wordpress.browser-actions actions-json[${index}] must be an object`)
+    }
+    const typedAction = action as BrowserActionInput
+    if (typeof typedAction.type !== "string" || typedAction.type.length === 0) {
+      throw new Error(`wordpress.browser-actions actions-json[${index}].type is required`)
+    }
+    return typedAction
+  })
+}
+
+async function executeBrowserAction(page: Page, action: BrowserActionInput, baseUrl: string): Promise<void> {
+  if (action.type === "navigate") {
+    await page.goto(resolveBrowserActionUrl(action, baseUrl), { waitUntil: browserActionLoadState(action.waitFor) })
+    return
+  }
+
+  if (action.type === "click") {
+    if (typeof action.selector === "string" && action.selector.length > 0) {
+      await page.click(action.selector)
+      return
+    }
+    if (typeof action.text === "string" && action.text.length > 0) {
+      await page.getByText(action.text).click()
+      return
+    }
+    throw new Error("wordpress.browser-actions click requires selector or text")
+  }
+
+  if (action.type === "fill") {
+    if (typeof action.selector !== "string" || action.selector.length === 0) {
+      throw new Error("wordpress.browser-actions fill requires selector")
+    }
+    if (typeof action.value !== "string") {
+      throw new Error("wordpress.browser-actions fill requires value")
+    }
+    await page.fill(action.selector, action.value)
+    return
+  }
+
+  if (action.type === "press") {
+    if (typeof action.key !== "string" || action.key.length === 0) {
+      throw new Error("wordpress.browser-actions press requires key")
+    }
+    if (typeof action.selector === "string" && action.selector.length > 0) {
+      await page.press(action.selector, action.key)
+      return
+    }
+    await page.keyboard.press(action.key)
+    return
+  }
+
+  if (action.type === "wait") {
+    await waitForBrowserAction(page, action)
+    return
+  }
+
+  if (action.type === "capture") {
+    return
+  }
+
+  throw new Error(`wordpress.browser-actions action type is not supported: ${action.type}`)
+}
+
+function resolveBrowserActionUrl(action: BrowserActionInput, baseUrl: string): string {
+  if (typeof action.url !== "string" || action.url.trim().length === 0) {
+    throw new Error("wordpress.browser-actions navigate requires url")
+  }
+  return resolveBrowserProbeUrl(action.url.trim(), baseUrl)
+}
+
+function browserActionLoadState(waitFor: unknown): "domcontentloaded" | "load" | "networkidle" {
+  if (waitFor === undefined || waitFor === null || waitFor === "") {
+    return "domcontentloaded"
+  }
+  if (waitFor === "domcontentloaded" || waitFor === "load" || waitFor === "networkidle") {
+    return waitFor
+  }
+  throw new Error(`wordpress.browser-actions navigate waitFor supports domcontentloaded, load, networkidle: ${waitFor}`)
+}
+
+async function waitForBrowserAction(page: Page, action: BrowserActionInput): Promise<void> {
+  if (typeof action.selector === "string" && action.selector.length > 0) {
+    await page.waitForSelector(action.selector)
+    return
+  }
+
+  const waitFor = typeof action.waitFor === "string" ? action.waitFor : "load"
+  if (waitFor === "domcontentloaded" || waitFor === "load" || waitFor === "networkidle") {
+    await page.waitForLoadState(waitFor)
+    return
+  }
+  if (waitFor === "duration") {
+    await page.waitForTimeout(browserActionDurationMs(action))
+    return
+  }
+
+  throw new Error(`wordpress.browser-actions wait supports selector, domcontentloaded, load, networkidle, duration: ${waitFor}`)
+}
+
+function browserActionDurationMs(action: BrowserActionInput): number {
+  const raw = typeof action.duration === "string" ? action.duration : "0ms"
+  const match = raw.trim().match(/^(\d+(?:\.\d+)?)(ms|s)$/)
+  if (!match) {
+    throw new Error("wordpress.browser-actions duration must be a duration like 500ms or 2s")
+  }
+  const value = Number.parseFloat(match[1])
+  return Math.max(0, Math.round(match[2] === "ms" ? value : value * 1000))
+}
+
+function browserActionRecord(
+  index: number,
+  action: BrowserActionInput,
+  status: BrowserActionRecord["status"],
+  startedAt: string,
+  finalUrl: string,
+  error?: BrowserProbeErrorRecord,
+): BrowserActionRecord {
+  return {
+    index,
+    type: action.type,
+    status,
+    startedAt,
+    finishedAt: now(),
+    ...(typeof action.url === "string" ? { url: action.url } : {}),
+    ...(typeof action.selector === "string" ? { selector: action.selector } : {}),
+    ...(typeof action.text === "string" ? { text: action.text } : {}),
+    ...(typeof action.key === "string" ? { key: action.key } : {}),
+    ...(typeof action.waitFor === "string" ? { waitFor: action.waitFor } : {}),
+    ...(typeof action.duration === "string" ? { duration: action.duration } : {}),
+    finalUrl,
+    ...(error ? { error } : {}),
+  }
 }
 
 function resolveBrowserProbeUrl(pathOrUrl: string, baseUrl: string): string {

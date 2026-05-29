@@ -39,6 +39,7 @@ const expectedCommandIds = [
   "wordpress.core-phpunit",
   "wordpress.theme-check",
   "wordpress.browser-probe",
+  "wordpress.browser-actions",
   "wp-codebox.agent-runtime-probe",
   "wp-codebox.agent-sandbox-run",
 ]

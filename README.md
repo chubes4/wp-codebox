@@ -435,12 +435,15 @@ Supported runtime commands today:
 - `wordpress.wp-cli`: run WP-CLI; accepts `command='wp option get home'` or plain args.
 - `wordpress.ability`: execute a registered WordPress Ability; accepts `name=<ability>` and optional JSON `input=<object>`.
 - `wordpress.browser-probe`: boot the live preview, visit `url=<path-or-url>` with Playwright, and capture generic browser replay/audit evidence under `files/browser/`.
+- `wordpress.browser-actions`: boot the live preview, run generic browser interactions, and capture replay/audit evidence under `files/browser/`.
 
 `wordpress.run-php` loads `/wordpress/wp-load.php` by default. Use `--arg bootstrap=none` for raw PHP.
 
 `wordpress.wp-cli` automatically enables Playground's `wp-cli` extra library when the command is allowed by runtime policy.
 
 `wordpress.browser-probe` accepts `wait-for=domcontentloaded|load|networkidle|selector:<selector>|duration`, `duration=<n>s`, and `capture=console,errors,html,network,screenshot`. It records machine-readable evidence refs such as `files/browser/console.jsonl`, `files/browser/errors.jsonl`, `files/browser/network.jsonl`, `files/browser/snapshot.html`, `files/browser/screenshot.png`, and `files/browser/summary.json` when those captures are enabled. The summary includes requested/final URLs, viewport/device metadata, HTML and screenshot hashes, network event counts, and a generic `artifact-backed|partial|diagnostic-only` replayability classification. WP Codebox intentionally keeps these browser evidence fields generic; consumers such as eval harnesses may interpret them without WP Codebox adding scoring, grading, or benchmark semantics.
+
+`wordpress.browser-actions` accepts `actions-json=<array>` with ordered `navigate`, `click`, `fill`, `press`, `wait`, and `capture` actions. `navigate` uses `url` plus optional `waitFor=domcontentloaded|load|networkidle`; `click` uses `selector` or `text`; `fill` uses `selector` and `value`; `press` uses `key` plus optional `selector`; `wait` uses `selector` or `waitFor=domcontentloaded|load|networkidle|duration` with `duration=<n>s|<n>ms`. It records `files/browser/actions.jsonl`, `files/browser/action-summary.json`, and optional `console`, `errors`, `network`, `html`, and `screenshot` captures. Failures identify the failed action index/type in the action log, include serialized browser errors, and still write the requested audit artifacts when possible.
 
 WP Codebox defaults to WordPress `7.0` because the agent and AI plugin stacks need the modern WordPress AI surface. Override with `--wp trunk`, `--wp nightly`, or another supported Playground version.
 

@@ -28,7 +28,7 @@ try {
         policy: {
           network: "deny",
           filesystem: "readwrite-mounts",
-          commands: ["wordpress.wp-cli", "inspect-mounted-inputs"],
+          commands: ["wordpress.wp-cli", "wordpress.browser-actions", "inspect-mounted-inputs"],
           secrets: "none",
           approvals: "never",
         },
@@ -71,6 +71,17 @@ try {
       ["notes", "seed.txt"],
     )
 
+    const browser = await runRuntimeAction(episode, { type: "browser", operation: "navigate", url: "/", capture: ["actions", "errors"] }, policy)
+    assert.equal(browser.schema, RUNTIME_ACTION_OBSERVATION_SCHEMA)
+    assert.equal(browser.type, "browser")
+    assert.equal(browser.data.operation, "navigate")
+    assert.equal(browser.step?.action.kind, "browser")
+    assert.equal(browser.step?.execution.command, "wordpress.browser-actions")
+    assert.deepEqual(browser.step?.execution.args, [
+      'actions-json=[{"type":"navigate","url":"/"}]',
+      "capture=actions,errors",
+    ])
+
     const deleteResult = await runRuntimeAction(episode, { type: "filesystem", operation: "delete", path: "/workspace/notes/hello.txt" }, policy)
     assert.equal(deleteResult.data.deleted, true)
 
@@ -84,8 +95,9 @@ try {
     )
 
     const trace = await episode.trace()
-    assert.equal(trace.steps.length, 5)
+    assert.equal(trace.steps.length, 6)
     assert.equal(trace.steps.filter((step) => step.action.kind === "filesystem").length, 4)
+    assert.equal(trace.steps.filter((step) => step.action.kind === "browser").length, 1)
     assert.equal(validateRuntimeEpisodeTrace(trace).valid, true)
   } finally {
     await episode.close()
