@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, commandRegistry, createRuntime, createWorkspaceRecipeJsonSchema, recipeCommandDefinitions, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type CommandDefinition, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeJsonSchema, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, commandRegistry, createRuntime, createWorkspaceRecipeJsonSchema, recipeCommandDefinitions, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type CommandDefinition, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeJsonSchema, type WorkspaceRecipePluginRuntime, type WorkspaceRecipePluginRuntimeHealthProbe, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
 import { captureStdout, printArtifactVerifyHumanOutput, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
@@ -337,6 +337,7 @@ interface RecipeRunOutput {
   executions: RecipeExecutionResult[]
   stagedFiles?: RecipeRunStagedFile[]
   siteSeeds?: RecipeRunSiteSeed[]
+  diagnostics?: RecipeRuntimeDiagnostic[]
   validation?: {
     issues: RecipeValidationIssue[]
   }
@@ -376,6 +377,7 @@ interface RecipeDryRunPlan {
   mounts: RecipeDryRunMount[]
   workspaces: RecipeDryRunWorkspace[]
   extra_plugins: RecipeDryRunExtraPlugin[]
+  pluginRuntime?: RecipeDryRunPluginRuntime
   siteSeeds: RecipeDryRunSiteSeed[]
   stagedFiles: RecipeDryRunStagedFile[]
   secretEnv: Array<{ name: string; available: boolean }>
@@ -428,6 +430,36 @@ interface RecipeDryRunExtraPlugin {
   activate: boolean
   loadAs: "plugin" | "mu-plugin"
   provenance: RecipeSourceProvenance
+}
+
+interface RecipeDryRunPluginRuntime {
+  label?: string
+  php?: WorkspaceRecipePluginRuntime["php"]
+  wpConfigDefines?: WorkspaceRecipePluginRuntime["wpConfigDefines"]
+  setup: RecipeDryRunStep[]
+  healthProbes: RecipeDryRunPluginRuntimeHealthProbe[]
+}
+
+interface RecipeDryRunPluginRuntimeHealthProbe {
+  index: number
+  name: string
+  type: WorkspaceRecipePluginRuntimeHealthProbe["type"]
+  command: string
+  args: string[]
+  resolvedCommand: string
+  resolvedArgs: string[]
+  policy: RecipeDryRunStep["policy"]
+}
+
+interface RecipeRuntimeDiagnostic {
+  schema: "wp-codebox/plugin-runtime-diagnostic/v1"
+  severity: "error"
+  phase: "setup" | "health-probe" | "runtime"
+  name?: string
+  command?: string
+  exitCode?: number
+  message: string
+  executionIndex?: number
 }
 
 interface RecipeDryRunSiteSeed {
@@ -1123,6 +1155,7 @@ async function recipeDryRunPlan(recipe: WorkspaceRecipe, recipeDirectory: string
   const policyValidation = validateRuntimePolicy(policy)
   const workspaces = recipeDryRunWorkspaces(recipe, recipeDirectory)
   const extraPlugins = recipeDryRunExtraPlugins(recipe, recipeDirectory)
+  const pluginRuntime = await recipeDryRunPluginRuntime(recipe, recipeDirectory, policy)
   const siteSeeds = recipeDryRunSiteSeeds(recipe, recipeDirectory)
   const stagedFiles = await recipeDryRunStagedFiles(recipe, recipeDirectory)
   const workflowSteps = await recipeDryRunSteps(recipe, recipeDirectory, policy)
@@ -1182,6 +1215,7 @@ async function recipeDryRunPlan(recipe: WorkspaceRecipe, recipeDirectory: string
     mounts,
     workspaces,
     extra_plugins: extraPlugins,
+    ...(pluginRuntime ? { pluginRuntime } : {}),
     siteSeeds,
     stagedFiles,
     secretEnv: (recipe.inputs?.secretEnv ?? []).map((name) => ({
@@ -1442,6 +1476,16 @@ async function runRecipe(options: RecipeRunOptions, interruption?: RecipeInterru
       interruption?.throwIfInterrupted()
     }
 
+    for (const [index, setupStep] of (recipe.inputs?.pluginRuntime?.setup ?? []).entries()) {
+      executions.push(await awaitRecipe(executeRecipePluginRuntimeStep(runtime, setupStep, recipeDirectory, "setup", index)))
+      interruption?.throwIfInterrupted()
+    }
+
+    for (const [index, probe] of (recipe.inputs?.pluginRuntime?.healthProbes ?? []).entries()) {
+      executions.push(await awaitRecipe(executeRecipePluginRuntimeHealthProbe(runtime, probe, recipeDirectory, index)))
+      interruption?.throwIfInterrupted()
+    }
+
     const siteSeeds = await awaitRecipe(importRecipeSiteSeeds(recipe, recipeDirectory, runtime, executions))
     interruption?.throwIfInterrupted()
 
@@ -1525,6 +1569,7 @@ async function runRecipe(options: RecipeRunOptions, interruption?: RecipeInterru
       recipePath,
       ...(runtime ? { runtime: await runtime.info() } : {}),
       executions,
+      diagnostics: recipeRuntimeDiagnostics(recipe, executions, error),
       ...(artifacts ? { artifacts } : {}),
       ...(interruption?.metadata ? { interruption: interruption.metadata } : {}),
       error: serializeError(error),
@@ -3266,6 +3311,16 @@ function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe 
     }
   }
 
+  const pluginRuntime = recipe.inputs?.pluginRuntime
+  if (pluginRuntime) {
+    if (pluginRuntime.setup && !Array.isArray(pluginRuntime.setup)) {
+      throw new Error(`Recipe pluginRuntime setup must be an array: ${recipePath}`)
+    }
+    if (pluginRuntime.healthProbes && !Array.isArray(pluginRuntime.healthProbes)) {
+      throw new Error(`Recipe pluginRuntime healthProbes must be an array: ${recipePath}`)
+    }
+  }
+
   const siteSeeds = recipe.inputs?.siteSeeds ?? []
   if (!Array.isArray(siteSeeds)) {
     throw new Error(`Recipe siteSeeds must be an array: ${recipePath}`)
@@ -3391,6 +3446,8 @@ async function validateWorkspaceRecipe(recipe: WorkspaceRecipe, recipePath: stri
     }
   }
 
+  await validateRecipePluginRuntime(recipe.inputs?.pluginRuntime, addIssue)
+
   for (const [index, name] of (recipe.inputs?.secretEnv ?? []).entries()) {
     if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
       addIssue("invalid-secret-env", `$.inputs.secretEnv[${index}]`, `Secret environment variable names must match /^[A-Z_][A-Z0-9_]*$/: ${name}`)
@@ -3408,6 +3465,66 @@ async function validateWorkspaceRecipe(recipe: WorkspaceRecipe, recipePath: stri
   }
 
   return issues
+}
+
+async function validateRecipePluginRuntime(pluginRuntime: WorkspaceRecipePluginRuntime | undefined, addIssue: (code: string, path: string, message: string) => void): Promise<void> {
+  if (!pluginRuntime) {
+    return
+  }
+
+  const memoryLimit = pluginRuntime.php?.memoryLimit
+  if (memoryLimit !== undefined && !/^[0-9]+[KMG]?$/.test(memoryLimit)) {
+    addIssue("invalid-plugin-runtime-memory-limit", "$.inputs.pluginRuntime.php.memoryLimit", "Plugin runtime memoryLimit must be a PHP shorthand size such as 256M.")
+  }
+
+  const maxExecutionTime = pluginRuntime.php?.maxExecutionTime
+  if (maxExecutionTime !== undefined && (!Number.isInteger(maxExecutionTime) || maxExecutionTime < 0 || maxExecutionTime > 3600)) {
+    addIssue("invalid-plugin-runtime-max-execution-time", "$.inputs.pluginRuntime.php.maxExecutionTime", "Plugin runtime maxExecutionTime must be an integer from 0 through 3600.")
+  }
+
+  for (const [name, value] of Object.entries(pluginRuntime.wpConfigDefines ?? {})) {
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(name)) {
+      addIssue("invalid-plugin-runtime-wp-config-define", `$.inputs.pluginRuntime.wpConfigDefines.${name}`, "wpConfigDefines keys must be valid PHP constant names.")
+    }
+    if (!["string", "number", "boolean"].includes(typeof value) && value !== null) {
+      addIssue("invalid-plugin-runtime-wp-config-define-value", `$.inputs.pluginRuntime.wpConfigDefines.${name}`, "wpConfigDefines values must be string, number, boolean, or null.")
+    }
+  }
+
+  for (const [index, step] of (pluginRuntime.setup ?? []).entries()) {
+    const path = `$.inputs.pluginRuntime.setup[${index}]`
+    if (!supportedRecipeCommands.has(step.command)) {
+      addIssue("unsupported-plugin-runtime-setup-command", `${path}.command`, `Unsupported plugin runtime setup command: ${step.command}`)
+      continue
+    }
+    await validateRecipeStepArgs(step, path, addIssue)
+  }
+
+  for (const [index, probe] of (pluginRuntime.healthProbes ?? []).entries()) {
+    const path = `$.inputs.pluginRuntime.healthProbes[${index}]`
+    if (!/^[a-z0-9][a-z0-9_.-]*$/i.test(probe.name)) {
+      addIssue("invalid-plugin-runtime-health-probe-name", `${path}.name`, `Plugin runtime health probe names must be stable identifiers: ${probe.name}`)
+    }
+    if (probe.type === "plugin-active") {
+      if (!probe.pluginFile || !/^[^/][^:]*\.php$/.test(probe.pluginFile) || probe.pluginFile.includes("..")) {
+        addIssue("invalid-plugin-runtime-health-probe-plugin", `${path}.pluginFile`, "plugin-active health probes require a relative pluginFile ending in .php.")
+      }
+      continue
+    }
+    if (probe.type === "php") {
+      if (!probe.code || typeof probe.code !== "string") {
+        addIssue("missing-plugin-runtime-health-probe-code", `${path}.code`, "php health probes require inline code.")
+      }
+      continue
+    }
+    if (probe.type === "wp-cli") {
+      if (!probe.command || typeof probe.command !== "string") {
+        addIssue("missing-plugin-runtime-health-probe-command", `${path}.command`, "wp-cli health probes require a command.")
+      }
+      continue
+    }
+    addIssue("unsupported-plugin-runtime-health-probe", `${path}.type`, `Unsupported plugin runtime health probe type: ${probe.type}`)
+  }
 }
 
 async function validateRecipeSiteSeed(siteSeed: WorkspaceRecipeSiteSeed, recipeDirectory: string, path: string, addIssue: (code: string, path: string, message: string) => void): Promise<void> {
@@ -3637,6 +3754,92 @@ async function executeRecipeWorkflowStep(runtime: Runtime, workflowStep: ReturnT
   }
 }
 
+async function executeRecipePluginRuntimeStep(runtime: Runtime, step: WorkspaceRecipe["workflow"]["steps"][number], recipeDirectory: string, phase: "setup", index: number): Promise<RecipeExecutionResult> {
+  try {
+    const execution = await runtime.execute(await recipeExecutionSpec(step, recipeDirectory))
+    return withRecipeExecutionPhase(execution, phase, pluginRuntimeSetupStepIndex(index), `plugin-runtime.setup:${index}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Recipe plugin runtime setup[${index}] failed: ${message}`, { cause: error })
+  }
+}
+
+async function executeRecipePluginRuntimeHealthProbe(runtime: Runtime, probe: WorkspaceRecipePluginRuntimeHealthProbe, recipeDirectory: string, index: number): Promise<RecipeExecutionResult> {
+  try {
+    const execution = await runtime.execute(await recipeExecutionSpec(pluginRuntimeHealthProbeStep(probe), recipeDirectory))
+    return withRecipeExecutionPhase(execution, "setup", pluginRuntimeHealthProbeStepIndex(index), `plugin-runtime.health:${probe.name}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Recipe plugin runtime health probe "${probe.name}" failed: ${message}`, { cause: error })
+  }
+}
+
+function pluginRuntimeSetupStepIndex(index: number): number {
+  return -1000 - index
+}
+
+function pluginRuntimeHealthProbeStepIndex(index: number): number {
+  return -2000 - index
+}
+
+function pluginRuntimeHealthProbeStep(probe: WorkspaceRecipePluginRuntimeHealthProbe): WorkspaceRecipe["workflow"]["steps"][number] {
+  if (probe.type === "plugin-active") {
+    return {
+      command: "wordpress.run-php",
+      args: [`code=${pluginRuntimePluginActiveProbeCode(probe.pluginFile ?? "")}`],
+    }
+  }
+
+  if (probe.type === "wp-cli") {
+    return {
+      command: "wordpress.wp-cli",
+      args: [`command=${probe.command ?? ""}`],
+    }
+  }
+
+  return {
+    command: "wordpress.run-php",
+    args: [`code=${probe.code ?? ""}`],
+  }
+}
+
+function pluginRuntimePluginActiveProbeCode(pluginFile: string): string {
+  return `require_once ABSPATH . 'wp-admin/includes/plugin.php';
+$plugin = ${JSON.stringify(pluginFile)};
+if (!is_plugin_active($plugin)) {
+    throw new RuntimeException(sprintf('Plugin runtime health probe failed: plugin is not active: %s', $plugin));
+}
+echo wp_json_encode(array('command' => 'plugin-runtime.health', 'type' => 'plugin-active', 'pluginFile' => $plugin, 'active' => true), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);`
+}
+
+function recipeRuntimeDiagnostics(recipe: WorkspaceRecipe, executions: RecipeExecutionResult[], error: unknown): RecipeRuntimeDiagnostic[] | undefined {
+  const diagnostics: RecipeRuntimeDiagnostic[] = executions
+    .map((execution, executionIndex) => ({ execution, executionIndex }))
+    .filter(({ execution }) => execution.recipeCommand?.startsWith("plugin-runtime.") && execution.exitCode !== 0)
+    .map(({ execution, executionIndex }) => ({
+      schema: "wp-codebox/plugin-runtime-diagnostic/v1" as const,
+      severity: "error" as const,
+      phase: execution.recipeCommand?.startsWith("plugin-runtime.health:") ? "health-probe" as const : "setup" as const,
+      name: execution.recipeCommand?.split(":").slice(1).join(":"),
+      command: execution.command,
+      exitCode: execution.exitCode,
+      message: execution.stderr || execution.stdout || `Plugin runtime command failed with exit code ${execution.exitCode}`,
+      executionIndex,
+    }))
+
+  const message = error instanceof Error ? error.message : String(error)
+  if ((recipe.inputs?.pluginRuntime || message.includes("plugin runtime")) && diagnostics.length === 0) {
+    diagnostics.push({
+      schema: "wp-codebox/plugin-runtime-diagnostic/v1",
+      severity: "error",
+      phase: message.includes("health probe") ? "health-probe" : message.includes("setup") ? "setup" : "runtime",
+      message,
+    })
+  }
+
+  return diagnostics.length > 0 ? diagnostics : undefined
+}
+
 function recipeWorkflowMetadata(recipe: WorkspaceRecipe): { before?: Array<{ command: string; args: string[] }>; steps: Array<{ command: string; args: string[] }>; after?: Array<{ command: string; args: string[] }> } {
   return {
     ...(recipe.workflow.before ? { before: recipe.workflow.before.map(recipeStepMetadata) } : {}),
@@ -3719,7 +3922,14 @@ function parseRecipeArgs(args: string[]): Record<string, string | true> {
 }
 
 function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
-  const commands = recipeWorkflowSteps(recipe).map(({ step }) => step.command.startsWith("wp-codebox.agent-") ? "wordpress.run-php" : step.command)
+  const pluginRuntimeCommands = [
+    ...(recipe.inputs?.pluginRuntime?.setup ?? []),
+    ...(recipe.inputs?.pluginRuntime?.healthProbes ?? []).map(pluginRuntimeHealthProbeStep),
+  ].map((step) => step.command)
+  const commands = [
+    ...recipeWorkflowSteps(recipe).map(({ step }) => step.command.startsWith("wp-codebox.agent-") ? "wordpress.run-php" : step.command),
+    ...pluginRuntimeCommands,
+  ]
   if (recipeWorkflowSteps(recipe).some(({ step }) => step.command === "wp-codebox.agent-sandbox-run")) {
     commands.unshift("wordpress.wp-cli")
   }
@@ -3768,6 +3978,7 @@ function recipeRunMetadata(recipe: WorkspaceRecipe, recipePath: string, workspac
         workspaces: recipe.inputs?.workspaces ?? [],
         mounts: recipe.inputs?.mounts ?? [],
         extra_plugins: extraPluginMetadata,
+        pluginRuntime: recipe.inputs?.pluginRuntime ?? {},
         siteSeeds: recipe.inputs?.siteSeeds ?? [],
         siteSeedProvenance,
         stagedFiles: recipe.inputs?.stagedFiles ?? [],
@@ -3789,6 +4000,7 @@ function recipeRunMetadata(recipe: WorkspaceRecipe, recipePath: string, workspac
         workspaces: recipe.inputs?.workspaces ?? [],
         mounts: recipe.inputs?.mounts ?? [],
         extra_plugins: extraPluginMetadata,
+        pluginRuntime: recipe.inputs?.pluginRuntime ?? {},
         siteSeeds: recipe.inputs?.siteSeeds ?? [],
         siteSeedProvenance,
         stagedFiles: recipe.inputs?.stagedFiles ?? [],
@@ -3858,6 +4070,37 @@ function recipeDryRunExtraPlugins(recipe: WorkspaceRecipe, recipeDirectory: stri
       loadAs: plugin.loadAs ?? "plugin",
       provenance,
     }
+  })
+}
+
+async function recipeDryRunPluginRuntime(recipe: WorkspaceRecipe, recipeDirectory: string, policy: RuntimePolicy): Promise<RecipeDryRunPluginRuntime | undefined> {
+  const pluginRuntime = recipe.inputs?.pluginRuntime
+  if (!pluginRuntime) {
+    return undefined
+  }
+
+  const setup = await Promise.all((pluginRuntime.setup ?? []).map((step, index) => recipeDryRunStep(step, recipeDirectory, policy, "setup", pluginRuntimeSetupStepIndex(index), `plugin-runtime.setup:${index}`)))
+  const healthProbes = await Promise.all((pluginRuntime.healthProbes ?? []).map(async (probe, index) => {
+    const step = pluginRuntimeHealthProbeStep(probe)
+    const dryRunStep = await recipeDryRunStep(step, recipeDirectory, policy, "setup", pluginRuntimeHealthProbeStepIndex(index), `plugin-runtime.health:${probe.name}`)
+    return {
+      index,
+      name: probe.name,
+      type: probe.type,
+      command: dryRunStep.command,
+      args: dryRunStep.args,
+      resolvedCommand: dryRunStep.resolvedCommand,
+      resolvedArgs: dryRunStep.resolvedArgs,
+      policy: dryRunStep.policy,
+    }
+  }))
+
+  return stripUndefined({
+    label: pluginRuntime.label,
+    php: pluginRuntime.php,
+    wpConfigDefines: pluginRuntime.wpConfigDefines,
+    setup,
+    healthProbes,
   })
 }
 

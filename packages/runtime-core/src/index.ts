@@ -489,6 +489,27 @@ export interface WorkspaceRecipeStep {
   args?: string[]
 }
 
+export interface WorkspaceRecipePluginRuntimePhp {
+  memoryLimit?: string
+  maxExecutionTime?: number
+}
+
+export interface WorkspaceRecipePluginRuntimeHealthProbe {
+  name: string
+  type: "plugin-active" | "php" | "wp-cli"
+  pluginFile?: string
+  code?: string
+  command?: string
+}
+
+export interface WorkspaceRecipePluginRuntime {
+  label?: string
+  php?: WorkspaceRecipePluginRuntimePhp
+  wpConfigDefines?: Record<string, string | number | boolean | null>
+  setup?: WorkspaceRecipeStep[]
+  healthProbes?: WorkspaceRecipePluginRuntimeHealthProbe[]
+}
+
 export interface WorkspaceRecipeExtraPlugin {
   source: string
   slug?: string
@@ -585,6 +606,7 @@ export interface WorkspaceRecipe {
     extra_plugins?: WorkspaceRecipeExtraPlugin[]
     extraPlugins?: WorkspaceRecipeExtraPlugin[]
     secretEnv?: string[]
+    pluginRuntime?: WorkspaceRecipePluginRuntime
     siteSeeds?: WorkspaceRecipeSiteSeed[]
     stagedFiles?: WorkspaceRecipeStagedFile[]
     inherit?: WorkspaceRecipeInheritanceRequest
@@ -713,6 +735,7 @@ export function createWorkspaceRecipeJsonSchema(options: WorkspaceRecipeJsonSche
             type: "array",
             items: { type: "string", pattern: "^[A-Z_][A-Z0-9_]*$" },
           },
+          pluginRuntime: { $ref: "#/$defs/pluginRuntime" },
           siteSeeds: {
             type: "array",
             description: "Explicit site/content seed declarations. Local JSON fixture seeds are imported into the sandbox before workflow steps. Parent-site declarations remain bounded, auditable metadata until export support lands.",
@@ -838,6 +861,48 @@ export function createWorkspaceRecipeJsonSchema(options: WorkspaceRecipeJsonSche
           pluginFile: { type: "string" },
           activate: { type: "boolean" },
           sha256: { type: "string", pattern: "^[a-fA-F0-9]{64}$" },
+        },
+      },
+      pluginRuntime: {
+        type: "object",
+        additionalProperties: false,
+        description: "Generic runtime options for heavyweight plugin stacks. Consumers can tune PHP/WP config, run ordered setup hooks, and declare health probes without consumer-specific semantics.",
+        properties: {
+          label: { type: "string" },
+          php: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              memoryLimit: { type: "string", pattern: "^[0-9]+[KMG]?$" },
+              maxExecutionTime: { type: "integer", minimum: 0, maximum: 3600 },
+            },
+          },
+          wpConfigDefines: {
+            type: "object",
+            additionalProperties: {
+              type: ["string", "number", "boolean", "null"],
+            },
+          },
+          setup: {
+            type: "array",
+            items: { $ref: "#/$defs/step" },
+          },
+          healthProbes: {
+            type: "array",
+            items: { $ref: "#/$defs/pluginRuntimeHealthProbe" },
+          },
+        },
+      },
+      pluginRuntimeHealthProbe: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "type"],
+        properties: {
+          name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+          type: { enum: ["plugin-active", "php", "wp-cli"] },
+          pluginFile: { type: "string" },
+          code: { type: "string" },
+          command: { type: "string" },
         },
       },
       siteSeed: {

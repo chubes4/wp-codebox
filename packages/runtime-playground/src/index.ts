@@ -165,6 +165,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function phpLiteral(value: string | number | boolean | null): string {
+  if (typeof value === "string") {
+    return JSON.stringify(value)
+  }
+  if (value === null) {
+    return "null"
+  }
+  return String(value)
+}
+
 async function runPlaygroundCliWithoutProcessExit<T>(callback: () => Promise<T>): Promise<T> {
   const exit = process.exit
   process.exit = ((code?: string | number | null | undefined): never => {
@@ -1280,12 +1290,41 @@ ${phpBody(code)}`
     }
 
     return `<?php
+${this.pluginRuntimeBootstrapPhp()}
 require_once '/wordpress/wp-load.php';
 ${this.secretEnvPhp()}
 ${wpCliBridge ? `putenv(${JSON.stringify(`HOMEBOY_TERMINAL_ACTION_URL=${wpCliBridge.url}`)});
 putenv(${JSON.stringify(`HOMEBOY_TERMINAL_ACTION_TOKEN=${wpCliBridge.token}`)});
 ` : ""}
 ${phpBody(code)}`
+  }
+
+  private pluginRuntimeBootstrapPhp(): string {
+    const pluginRuntime = this.spec.metadata?.recipe && typeof this.spec.metadata.recipe === "object" && !Array.isArray(this.spec.metadata.recipe)
+      ? (this.spec.metadata.recipe as { inputs?: { pluginRuntime?: unknown } }).inputs?.pluginRuntime
+      : undefined
+    if (!pluginRuntime || typeof pluginRuntime !== "object" || Array.isArray(pluginRuntime)) {
+      return ""
+    }
+
+    const runtime = pluginRuntime as { php?: { memoryLimit?: unknown; maxExecutionTime?: unknown }; wpConfigDefines?: Record<string, unknown> }
+    const lines: string[] = []
+    const memoryLimit = typeof runtime.php?.memoryLimit === "string" ? runtime.php.memoryLimit : undefined
+    if (memoryLimit && /^[0-9]+[KMG]?$/.test(memoryLimit)) {
+      lines.push(`@ini_set('memory_limit', ${JSON.stringify(memoryLimit)});`)
+    }
+    const maxExecutionTime = runtime.php?.maxExecutionTime
+    if (Number.isInteger(maxExecutionTime) && typeof maxExecutionTime === "number" && maxExecutionTime >= 0 && maxExecutionTime <= 3600) {
+      lines.push(`@set_time_limit(${maxExecutionTime});`)
+    }
+    for (const [name, value] of Object.entries(runtime.wpConfigDefines ?? {})) {
+      if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || (!["string", "number", "boolean"].includes(typeof value) && value !== null)) {
+        continue
+      }
+      lines.push(`if (!defined(${JSON.stringify(name)})) { define(${JSON.stringify(name)}, ${phpLiteral(value as string | number | boolean | null)}); }`)
+    }
+
+    return lines.length > 0 ? `${lines.join("\n")}\n` : ""
   }
 
   private secretEnvPhp(): string {

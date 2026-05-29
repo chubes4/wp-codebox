@@ -73,3 +73,57 @@ Parent sites resolve connector credentials through an explicit envelope. The env
 Status values are `available`, `missing`, or `denied`. A parent WordPress runner fails closed before launching the sandbox when any requested connector credential envelope or secret reports `missing` or `denied`, returning `wp-codebox/connector-credential-failure/v1` with the same redacted connector/secret names and reasons.
 
 Successful runs carry the sanitized envelope through `inputs.inheritance.connectors[].credentials` and artifact provenance. Artifact redaction treats configured secret names and values as redactable, so provenance, logs, patches, mounted files, and review metadata expose only names/status/source/scope.
+
+## Heavyweight Plugin Runtime Recipes
+
+Recipes can declare generic heavyweight plugin runtime needs with `inputs.pluginRuntime`. The block is intentionally consumer-neutral: it describes PHP/WP runtime tuning, ordered setup commands, and health probes for complex plugin stacks without naming a benchmark, grader, reward, or any specific downstream product.
+
+```json
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": { "wp": "7.0" },
+  "inputs": {
+    "extraPlugins": [
+      {
+        "source": "./plugins/page-builder",
+        "slug": "page-builder",
+        "pluginFile": "page-builder/page-builder.php"
+      }
+    ],
+    "pluginRuntime": {
+      "label": "visual-builder-stack",
+      "php": {
+        "memoryLimit": "512M",
+        "maxExecutionTime": 120
+      },
+      "wpConfigDefines": {
+        "WP_DEBUG": true
+      },
+      "setup": [
+        { "command": "wordpress.wp-cli", "args": ["command=option update page_builder_ready yes"] }
+      ],
+      "healthProbes": [
+        { "name": "builder-active", "type": "plugin-active", "pluginFile": "page-builder/page-builder.php" },
+        { "name": "builder-option", "type": "wp-cli", "command": "option get page_builder_ready" },
+        { "name": "builder-php", "type": "php", "code": "if (!defined('WP_DEBUG')) { throw new RuntimeException('WP_DEBUG missing'); } echo 'ok';" }
+      ]
+    }
+  },
+  "workflow": {
+    "steps": [
+      { "command": "wordpress.run-php", "args": ["code=echo get_option('page_builder_ready');"] }
+    ]
+  }
+}
+```
+
+Execution order is stable:
+
+1. Mount recipe workspaces and `extraPlugins`.
+2. Install recipe-declared mu-plugin loaders.
+3. Activate `extraPlugins` in recipe order.
+4. Run `pluginRuntime.setup` steps in declared order.
+5. Run `pluginRuntime.healthProbes` in declared order.
+6. Import site seeds, then run normal workflow steps.
+
+Failed setup steps or health probes return `diagnostics[]` entries using `wp-codebox/plugin-runtime-diagnostic/v1`. Artifact collection still captures runtime logs, command traces, and the run attestation when an artifact directory is configured.
