@@ -29,6 +29,15 @@ if ( ! class_exists( 'WP_Error' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_CLI' ) ) {
+	class WP_CLI {
+		public static function add_command( string $name, callable $callable ): void { $GLOBALS['wp_codebox_cli_commands'][ $name ] = $callable; }
+		public static function line( string $message ): void { $GLOBALS['wp_codebox_cli_lines'][] = $message; }
+		public static function warning( string $message ): void { $GLOBALS['wp_codebox_cli_warnings'][] = $message; }
+		public static function error( string $message ): void { throw new RuntimeException( $message ); }
+	}
+}
+
 if ( ! class_exists( 'WP_Post' ) ) {
 	class WP_Post {
 		public function __construct( public int $ID, public string $post_type, public string $post_status, public string $post_name, public string $post_title, public string $post_content = '', public string $post_excerpt = '', public string $post_mime_type = '' ) {}
@@ -59,6 +68,9 @@ $GLOBALS['wp_codebox_filters']                      = array();
 $GLOBALS['wp_codebox_mock_abilities']              = array();
 $GLOBALS['wp_codebox_options']                      = array();
 $GLOBALS['wp_codebox_site_options']                 = array();
+$GLOBALS['wp_codebox_cli_commands']                 = array();
+$GLOBALS['wp_codebox_cli_lines']                    = array();
+$GLOBALS['wp_codebox_cli_warnings']                 = array();
 
 function wp_register_ability( string $name, array $definition ): void {
 	if ( isset( $definition['category'] ) && ! isset( $GLOBALS['wp_codebox_registered_ability_categories'][ $definition['category'] ] ) ) {
@@ -132,6 +144,7 @@ require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sand
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-artifacts.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-data-machine-pending-actions.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-abilities.php';
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-cli-command.php';
 
 $root = sys_get_temp_dir() . '/wp-codebox-wordpress-plugin-' . getmypid();
 foreach ( array( 'agents-api', 'data-machine', 'data-machine-code', 'plugin-root/agents-api', 'ai-provider-test', 'editable-plugin', 'artifacts', 'artifact-network-root' ) as $dir ) {
@@ -165,6 +178,7 @@ echo "WP Codebox WordPress plugin - smoke\n";
 
 new WP_Codebox_Data_Machine_Pending_Actions();
 new WP_Codebox_Abilities();
+WP_Codebox_CLI_Command::register();
 
 do_action( 'wp_abilities_api_init' );
 $assert( 'ability registration waits for category registration', ! isset( $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task'] ) );
@@ -175,6 +189,14 @@ do_action( 'wp_abilities_api_init' );
 $category = $GLOBALS['wp_codebox_registered_ability_categories']['wp-codebox'] ?? null;
 $assert( 'wp-codebox ability category registered', is_array( $category ) );
 $assert( 'category exposes label and description', isset( $category['label'] ) && isset( $category['description'] ) );
+
+$cli_commands = $GLOBALS['wp_codebox_cli_commands'];
+$assert( 'wp codebox artifacts list command registered', is_callable( $cli_commands['codebox artifacts list'] ?? null ) );
+$assert( 'wp codebox artifacts get command registered', is_callable( $cli_commands['codebox artifacts get'] ?? null ) );
+$assert( 'wp codebox artifacts stage-apply command registered', is_callable( $cli_commands['codebox artifacts stage-apply'] ?? null ) );
+$assert( 'wp codebox artifacts apply command registered', is_callable( $cli_commands['codebox artifacts apply'] ?? null ) );
+$assert( 'wp codebox browser-session create command registered', is_callable( $cli_commands['codebox browser-session create'] ?? null ) );
+$assert( 'wp codebox run-agent-task command registered', is_callable( $cli_commands['codebox run-agent-task'] ?? null ) );
 
 $ability = $GLOBALS['wp_codebox_registered_abilities']['wp-codebox/run-agent-task'] ?? null;
 $assert( 'run-agent-task ability registered', is_array( $ability ) );
@@ -1091,6 +1113,10 @@ $artifacts = new WP_Codebox_Artifacts();
 $listed    = $artifacts->list( array( 'artifacts_path' => $artifact_root ) );
 $assert( 'artifact listing succeeds', ! is_wp_error( $listed ) && 1 === count( $listed['artifacts'] ?? array() ) );
 $assert( 'artifact listing detects test results', ! is_wp_error( $listed ) && true === ( $listed['artifacts'][0]['has_test_results'] ?? false ) );
+
+call_user_func( $GLOBALS['wp_codebox_cli_commands']['codebox artifacts list'], array(), array( 'artifacts-path' => $artifact_root, 'format' => 'json' ) );
+$cli_list_output = json_decode( end( $GLOBALS['wp_codebox_cli_lines'] ), true );
+$assert( 'wp codebox artifacts list emits JSON service result', is_array( $cli_list_output ) && 'wp-codebox/artifact-list/v1' === ( $cli_list_output['schema'] ?? '' ) && $artifact_id === ( $cli_list_output['artifacts'][0]['id'] ?? '' ) );
 
 $read_artifact = $artifacts->get(
 	array(

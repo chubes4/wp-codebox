@@ -14,6 +14,7 @@ the parent control plane for review, replay, or apply-back.
 - `wp-codebox/discard-artifact`
 - `wp-codebox/apply-approved-artifact`
 - `wp-codebox/stage-artifact-apply`
+- WP-CLI wrappers under `wp codebox ...`
 
 The ability runs `wp-codebox agent-sandbox-run`, which boots a disposable
 WordPress Playground runtime, mounts the agent stack components, invokes the
@@ -138,6 +139,29 @@ Without Data Machine pending actions, `stage-artifact-apply` fails closed with
 `wp_codebox_datamachine_pending_actions_missing`. Direct reviewed apply remains
 available through `apply-approved-artifact` for hosts that provide their own
 approval surface.
+
+## WP-CLI
+
+The plugin registers focused WP-CLI wrappers for the same PHP service layer used
+by Abilities:
+
+- `wp codebox artifacts list --format=json`
+- `wp codebox artifacts get <artifact_id> --format=json`
+- `wp codebox artifacts stage-apply <artifact_id> --approved-files='/path.php' --format=json`
+- `wp codebox artifacts apply <artifact_id> --approved-files='/path.php' --format=json`
+- `wp codebox browser-session create --goal='Prepare a browser sandbox' --format=json`
+- `wp codebox run-agent-task --goal='Fix the plugin bug' --format=json`
+
+Complex task payloads can be passed with `--input-json='{"goal":"..."}'` or
+`--input-file=/path/to/input.json`; command-line flags override fields from the
+JSON payload. `--approved-files` accepts either a JSON array or a comma-separated
+list. CLI output is JSON-first for automation.
+
+WP-CLI commands run in trusted operator context. They do not call the Ability
+permission callbacks; shell/WP-CLI access is the permission boundary. The command
+methods delegate to the same PHP services as Abilities, so validation, artifact
+digest checks, pending-action staging, apply adapters, and runner errors behave
+the same way.
 
 See [External Apply Adapter Contract](../../docs/external-apply-adapter-contract.md)
 for the parent-control-plane contract. The documented smoke fixture proves that
