@@ -405,6 +405,7 @@ JSON output uses `wp-codebox/command-catalog/v1` and includes each command id, d
 ### `schema recipe`
 
 Print the JSON Schema for `wp-codebox/workspace-recipe/v1` without reading a recipe or launching Playground.
+The canonical schema source is `createWorkspaceRecipeJsonSchema()` in `@chubes4/wp-codebox-core`, next to the `WorkspaceRecipe` TypeScript contract; the CLI injects its current recipe command ids into that shared schema factory.
 
 ```bash
 npm run wp-codebox -- schema recipe --json

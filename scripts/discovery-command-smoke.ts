@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+import { createWorkspaceRecipeJsonSchema, type WorkspaceRecipe } from "@chubes4/wp-codebox-core"
 import Ajv2020 from "ajv/dist/2020.js"
 
 const execFileAsync = promisify(execFile)
@@ -42,6 +43,40 @@ const expectedCommandIds = [
   "wp-codebox.agent-sandbox-run",
 ]
 
+const representativeRecipes = [
+  {
+    schema: "wp-codebox/workspace-recipe/v1",
+    inputs: {
+      extraPlugins: [{
+        source: "https://downloads.wordpress.org/plugin/bbpress.latest-stable.zip",
+        pluginFile: "bbpress/bbpress.php",
+        activate: false,
+      }],
+      secretEnv: ["OPENAI_API_KEY"],
+      inherit: { connectors: ["primary-ai"], settings: ["site-defaults"] },
+      inheritance: {
+        connectors: [{ name: "primary-ai", status: "resolved", provider: "openai", model: "gpt-5.5", secretEnv: ["OPENAI_API_KEY"] }],
+        settings: [{ name: "site-defaults", status: "resolved", scope: "site" }],
+      },
+    },
+    workflow: { steps: [{ command: "wp-codebox.agent-sandbox-run", args: ["task=Cook dinner"] }] },
+  },
+  {
+    schema: "wp-codebox/workspace-recipe/v1",
+    inputs: {
+      workspaces: [{ target: "/wordpress/wp-content/plugins/demo", mode: "readwrite", sourceMode: "repo-backed", seed: { type: "plugin_scaffold", slug: "demo" } }],
+      stagedFiles: [{ source: "fixtures/demo.php", target: "/wordpress/wp-content/plugins/demo/demo.php" }],
+      siteSeeds: [{ type: "fixture", name: "demo-content", source: "fixtures/content.json", format: "json", scopes: { posts: { postTypes: ["post"], maxRecords: 3 } } }],
+    },
+    workflow: {
+      before: [{ command: "inspect-mounted-inputs" }],
+      steps: [{ command: "wordpress.wp-cli", args: ["command=plugin list --format=json"] }],
+      after: [{ command: "wordpress.run-php", args: ["code=<?php echo 'done';"] }],
+    },
+    artifacts: { directory: "./artifacts", verify: { enabled: true, strict: true }, workspacePolicy: { enabled: true, writableRoots: ["/wordpress/wp-content/plugins/demo"] } },
+  },
+] satisfies WorkspaceRecipe[]
+
 async function cliJson<T>(args: string[]): Promise<T> {
   const { stdout } = await execFileAsync(process.execPath, [cliPath, ...args], { cwd: repoRoot })
   return JSON.parse(stdout) as T
@@ -76,6 +111,10 @@ async function main(): Promise<void> {
   const schemaOutput = await cliJson<RecipeSchemaOutput>(["schema", "recipe", "--json"])
   assert(schemaOutput.schema === "wp-codebox/json-schema/v1", "Unexpected recipe schema envelope")
   assert(schemaOutput.id === "wp-codebox/workspace-recipe/v1", "Unexpected recipe schema id")
+  assert(
+    JSON.stringify(schemaOutput.jsonSchema) === JSON.stringify(createWorkspaceRecipeJsonSchema({ recipeCommandIds: expectedCommandIds })),
+    "CLI recipe schema must come from the shared runtime-core schema factory"
+  )
 
   const ajv = new Ajv2020({ strict: false })
   const validate = ajv.compile(schemaOutput.jsonSchema)
@@ -89,23 +128,9 @@ async function main(): Promise<void> {
     assert(validate(recipe), `${recipePath} does not validate against discovery schema: ${ajv.errorsText(validate.errors)}`)
   }
 
-  assert(validate({
-    schema: "wp-codebox/workspace-recipe/v1",
-    inputs: {
-      extraPlugins: [{
-        source: "https://downloads.wordpress.org/plugin/bbpress.latest-stable.zip",
-        pluginFile: "bbpress/bbpress.php",
-        activate: false,
-      }],
-      secretEnv: ["OPENAI_API_KEY"],
-      inherit: { connectors: ["primary-ai"], settings: ["site-defaults"] },
-      inheritance: {
-        connectors: [{ name: "primary-ai", status: "resolved", provider: "openai", model: "gpt-5.5", secretEnv: ["OPENAI_API_KEY"] }],
-        settings: [{ name: "site-defaults", status: "resolved", scope: "site" }],
-      },
-    },
-    workflow: { steps: [{ command: "wp-codebox.agent-sandbox-run", args: ["task=Cook dinner"] }] },
-  }), `inheritance recipe shape does not validate against discovery schema: ${ajv.errorsText(validate.errors)}`)
+  for (const recipe of representativeRecipes) {
+    assert(validate(recipe), `representative recipe does not validate against discovery schema: ${ajv.errorsText(validate.errors)}`)
+  }
 }
 
 main().catch((error) => {

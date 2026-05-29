@@ -37,7 +37,9 @@ wp-codebox schema recipe --json
 
 `commands` emits `wp-codebox/command-catalog/v1` with command ids,
 descriptions, accepted args, known output shape, and policy requirements.
-`schema recipe` emits the JSON Schema for `wp-codebox/workspace-recipe/v1`.
+`schema recipe` emits the JSON Schema for `wp-codebox/workspace-recipe/v1` from
+the canonical `createWorkspaceRecipeJsonSchema()` contract exported by
+`@chubes4/wp-codebox-core`.
 
 ## Recipe Planning
 
