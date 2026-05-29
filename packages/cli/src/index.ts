@@ -551,6 +551,35 @@ const WP_CODEBOX_RUNTIME_VERSION = "0.0.0"
 const DEFAULT_WORDPRESS_VERSION = "7.0"
 const ALLOW_NETWORK_DOWNLOADS_ENV = "WP_CODEBOX_ALLOW_NETWORK_DOWNLOADS"
 const execFileAsync = promisify(execFile)
+
+const DEFAULT_WORKSPACE_SEED_EXCLUDED_NAMES = new Set([
+  ".git",
+  ".homeboy",
+  ".homeboy-bin",
+  ".homeboy-build",
+  ".datamachine",
+  "node_modules",
+  "target",
+  "vendor",
+])
+
+function shouldCopyWorkspaceSeedEntry(sourceRoot: string, entry: string): boolean {
+  const relativePath = relative(sourceRoot, entry)
+  if (!relativePath) {
+    return true
+  }
+
+  return !relativePath.split(/[\\/]+/).some((part) => {
+    return DEFAULT_WORKSPACE_SEED_EXCLUDED_NAMES.has(part) || part === ".DS_Store" || part === ".env" || part.startsWith(".env.") || part.startsWith("._")
+  })
+}
+
+async function copyWorkspaceSeedDirectory(source: string, target: string): Promise<void> {
+  await cp(source, target, {
+    recursive: true,
+    filter: (entry) => shouldCopyWorkspaceSeedEntry(source, entry),
+  })
+}
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = resolve(moduleDirectory, "..", "..", "..")
 const commandCatalog: CommandMetadata[] = [
@@ -4464,8 +4493,8 @@ async function prepareRecipeWorkspace(workspace: WorkspaceRecipeWorkspace, recip
   const baselineDirectory = await mkdtemp(join(tmpdir(), `wp-codebox-${slug}-baseline-`))
   if (workspace.seed.type === "directory") {
     const source = resolve(recipeDirectory, workspace.seed.source ?? "")
-    await cp(source, directory, { recursive: true })
-    await cp(source, baselineDirectory, { recursive: true })
+    await copyWorkspaceSeedDirectory(source, directory)
+    await copyWorkspaceSeedDirectory(source, baselineDirectory)
     await ensureStandaloneGitPrimary(directory)
     return { source: directory, baselineSource: baselineDirectory, cleanupPaths: [directory, baselineDirectory] }
   }
