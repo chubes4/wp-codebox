@@ -703,8 +703,8 @@ final class WP_Codebox_Abilities {
 				),
 				'status'           => array(
 					'type'        => 'string',
-					'enum'        => array( 'completed' ),
-					'description' => 'Synchronous WP Codebox run status. Durable queued/running/cancelled/expired state belongs to the external orchestrator.',
+					'enum'        => array( 'ready', 'completed' ),
+					'description' => 'Synchronous WP Codebox preparation/run status. Durable queued/running/cancelled/expired state belongs to the external orchestrator.',
 				),
 				'persistence'      => array(
 					'type'        => 'string',
@@ -809,15 +809,8 @@ final class WP_Codebox_Abilities {
 			'execution'        => 'browser-playground',
 			'execution_scope'  => 'disposable-playground',
 			'permission_model' => 'sandbox-bypass',
-			'session'          => array(
-				'schema'       => 'wp-codebox/browser-playground-session/v1',
-				'id'           => $session_id,
-				'status'       => 'ready',
-				'persistence'  => 'external-orchestrator',
-				'execution_scope'  => 'disposable-playground',
-				'permission_model' => 'sandbox-bypass',
-				'orchestrator' => is_array( $input['orchestrator'] ?? null ) ? $input['orchestrator'] : array(),
-			),
+			'session'          => self::browser_session_envelope( $session_id, 'ready', $input ),
+			'task'             => (string) $task_input['goal'],
 			'task_input' => $task_input,
 			'agent'      => (string) ( $input['agent'] ?? 'wp-codebox-sandbox' ),
 			'plugins'    => $browser_plugins,
@@ -873,15 +866,8 @@ final class WP_Codebox_Abilities {
 				'message' => 'Browser Playground sandbox is missing required coding prerequisites.',
 				'missing' => $ready_to_code['missing'] ?? array(),
 			),
-			'session'          => array(
-				'schema'           => 'wp-codebox/browser-playground-session/v1',
-				'id'               => $session_id,
-				'status'           => 'blocked',
-				'persistence'      => 'external-orchestrator',
-				'execution_scope'  => 'disposable-playground',
-				'permission_model' => 'sandbox-bypass',
-				'orchestrator'     => is_array( $input['orchestrator'] ?? null ) ? $input['orchestrator'] : array(),
-			),
+			'session'          => self::browser_session_envelope( $session_id, 'blocked', $input ),
+			'task'             => (string) $task_input['goal'],
 			'task_input' => $task_input,
 			'agent'      => (string) ( $input['agent'] ?? 'wp-codebox-sandbox' ),
 			'plugins'    => $browser_plugins,
@@ -911,6 +897,15 @@ final class WP_Codebox_Abilities {
 				'expected_artifacts' => $task_input['expected_artifacts'],
 			),
 		);
+	}
+
+	/** @return array<string,mixed> */
+	private static function browser_session_envelope( string $session_id, string $status, array $input ): array {
+		$session = WP_Codebox_Agent_Task::session( $session_id, $status, $input );
+		$session['execution_scope']  = 'disposable-playground';
+		$session['permission_model'] = 'sandbox-bypass';
+
+		return $session;
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed> */
@@ -1013,34 +1008,12 @@ final class WP_Codebox_Abilities {
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	private static function normalize_task_input( array $input ): array|WP_Error {
-		$task_input = WP_Codebox_Task_Input_Contract::normalize( $input );
-		if ( is_wp_error( $task_input ) ) {
-			return $task_input;
-		}
-
-		$tool_error = ( new WP_Codebox_Agent_Sandbox_Runner() )->validate_allowed_tools( $task_input['allowed_tools'] );
-		if ( is_wp_error( $tool_error ) ) {
-			return $tool_error;
-		}
-
-		return $task_input;
+		return WP_Codebox_Agent_Task::normalize_input( $input, fn( array $tools ): WP_Error|null => ( new WP_Codebox_Agent_Sandbox_Runner() )->validate_allowed_tools( $tools ), true );
 	}
 
 	/** @return string[] */
 	private static function string_list( mixed $value ): array {
-		if ( ! is_array( $value ) ) {
-			return array();
-		}
-
-		$items = array();
-		foreach ( $value as $item ) {
-			$item = trim( (string) $item );
-			if ( '' !== $item && ! in_array( $item, $items, true ) ) {
-				$items[] = $item;
-			}
-		}
-
-		return $items;
+		return WP_Codebox_Agent_Task::string_list( $value );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<int,array<string,string>>|WP_Error */

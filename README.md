@@ -781,7 +781,13 @@ The WordPress plugin registers parent-site abilities:
 - `wp-codebox/apply-approved-artifact`
 - `wp-codebox/stage-artifact-apply`
 
-These abilities shell out to the local `wp-codebox` CLI, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
+Canonical agent-task execution paths are intentionally split by caller runtime:
+
+- Server/host execution uses `wp-codebox/run-agent-task` or `wp-codebox/run-agent-task-batch`. These abilities shell out to local `wp-codebox recipe-run`, boot disposable Playground sandboxes, mount the configured agent stack, invoke the sandbox agent through `agents/chat`, and return artifact metadata.
+- Portable CLI execution uses `wp-codebox recipe-run --recipe <path>`. Recipes use the `wp-codebox.agent-sandbox-run` helper step when they need the agent-task bridge; direct `agent-sandbox-run` remains an operator/debug command, not the product API for frontend callers.
+- No-Node/browser execution uses `wp-codebox/create-browser-playground-session`. The host prepares a browser-executable Playground recipe and runner payload; the browser executes `wordpress.run-php` inside Playground instead of requiring host shell or Node access.
+
+All three paths use the same `wp-codebox/task-input/v1` task input contract. Host and browser paths also emit the same `wp-codebox/sandbox-session/v1` session envelope so product callers can correlate prepared browser sessions and completed host runs without transport-specific metadata drift.
 
 `wp-codebox/run-agent-task-batch` runs one isolated sandbox per task sequentially and returns per-task status, artifact id, preview URL, and error fields. Parent orchestrators own any parallel fan-out above this ability.
 

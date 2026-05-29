@@ -20,6 +20,7 @@ define( 'WP_CODEBOX_PLUGIN_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WP_CODEBOX_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
 require_once __DIR__ . '/src/class-wp-codebox-task-input-contract.php';
+require_once __DIR__ . '/src/class-wp-codebox-agent-task.php';
 require_once __DIR__ . '/src/class-wp-codebox-agent-sandbox-runner.php';
 require_once __DIR__ . '/src/class-wp-codebox-artifacts.php';
 require_once __DIR__ . '/src/class-wp-codebox-data-machine-pending-actions.php';

@@ -11,8 +11,8 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	private const SCHEMA = 'wp-codebox/agent-task-run/v1';
 	private const BATCH_SCHEMA = 'wp-codebox/agent-task-batch/v1';
-	private const SESSION_SCHEMA = 'wp-codebox/sandbox-session/v1';
-	private const TASK_INPUT_SCHEMA = WP_Codebox_Task_Input_Contract::SCHEMA;
+	private const SESSION_SCHEMA = WP_Codebox_Agent_Task::SESSION_SCHEMA;
+	private const TASK_INPUT_SCHEMA = WP_Codebox_Agent_Task::INPUT_SCHEMA;
 	private const TOOL_DENIAL_SCHEMA = 'wp-codebox/tool-allowlist-denial/v1';
 	private const REMEDIATION_OUTCOME_SCHEMA = 'wp-codebox/agent-sandbox-remediation-outcome/v1';
 	private const SANDBOX_TOOL_POLICY_FILE = __DIR__ . '/generated-sandbox-datamachine-tool-policy.php';
@@ -780,17 +780,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	private function task_input( array $input ): array|WP_Error {
-		$task_input = WP_Codebox_Task_Input_Contract::normalize( $input );
-		if ( is_wp_error( $task_input ) ) {
-			return $task_input;
-		}
-
-		$tool_error = $this->validate_allowed_tools( $task_input['allowed_tools'] );
-		if ( is_wp_error( $tool_error ) ) {
-			return $tool_error;
-		}
-
-		return $task_input;
+		return WP_Codebox_Agent_Task::normalize_input( $input, fn( array $tools ): WP_Error|null => $this->allowed_tools_error( $tools ) );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<int,array<string,mixed>>|WP_Error */
@@ -812,9 +802,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/** @param array<string,mixed> $task_input Normalized task input. */
 	private function task_input_prompt( array $task_input ): string {
-		$encoded = function_exists( 'wp_json_encode' ) ? wp_json_encode( $task_input, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) : json_encode( $task_input, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
-
-		return is_string( $encoded ) ? $encoded : '';
+		return WP_Codebox_Agent_Task::prompt( $task_input );
 	}
 
 	/** @return string[] */
@@ -1844,37 +1832,19 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/** @param array<string,mixed> $input Ability input. @param array<string,mixed> $run Decoded CLI run output. */
 	private function sandbox_session( string $session_id, string $status, array $input, array $run, string $artifacts ): array {
-		$session = array(
-			'schema'      => self::SESSION_SCHEMA,
-			'id'          => $session_id,
-			'status'      => $status,
-			'persistence' => 'external-orchestrator',
-			'artifacts'   => array_filter(
+		return WP_Codebox_Agent_Task::session(
+			$session_id,
+			$status,
+			$input,
+			array_filter(
 				array(
-					'path'       => $artifacts,
-					'bundle_id'  => is_array( $run['artifacts'] ?? null ) ? (string) ( $run['artifacts']['id'] ?? '' ) : '',
+					'path'        => $artifacts,
+					'bundle_id'   => is_array( $run['artifacts'] ?? null ) ? (string) ( $run['artifacts']['id'] ?? '' ) : '',
 					'preview_url' => is_array( $run['artifacts']['preview'] ?? null ) ? (string) ( $run['artifacts']['preview']['url'] ?? '' ) : '',
 				),
 				static fn( mixed $value ): bool => '' !== $value
-			),
+			)
 		);
-
-		if ( ! empty( $input['session_id'] ) ) {
-			$session['agent_session_id'] = (string) $input['session_id'];
-		}
-
-		if ( isset( $input['orchestrator'] ) && is_array( $input['orchestrator'] ) ) {
-			$session['orchestrator'] = array_filter(
-				array(
-					'id'     => isset( $input['orchestrator']['id'] ) ? (string) $input['orchestrator']['id'] : '',
-					'type'   => isset( $input['orchestrator']['type'] ) ? (string) $input['orchestrator']['type'] : '',
-					'job_id' => isset( $input['orchestrator']['job_id'] ) ? (string) $input['orchestrator']['job_id'] : '',
-				),
-				static fn( mixed $value ): bool => '' !== $value
-			);
-		}
-
-		return $session;
 	}
 
 	private function error_payload( WP_Error $error ): array {

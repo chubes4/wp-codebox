@@ -142,6 +142,7 @@ function get_terms( array $args ): array { return array( new WP_Term( 3, 'catego
 function get_users( array $args ): array { return array( new WP_User( 11, 'Private User', array( 'editor' ) ) ); }
 
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-task-input-contract.php';
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-task.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sandbox-runner.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-artifacts.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-data-machine-pending-actions.php';
@@ -308,7 +309,7 @@ $assert( 'ability exposes inheritance request schema', 'object' === ( $ability['
 $assert( 'ability exposes connector credential envelope schema', 'object' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['type'] ?? '' ) && 'array' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['properties']['secrets']['type'] ?? '' ) );
 $assert( 'ability exposes external sandbox session schema', 'string' === ( $ability['input_schema']['properties']['sandbox_session_id']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['orchestrator']['type'] ?? '' ) && 'object' === ( $ability['output_schema']['properties']['session']['type'] ?? '' ) );
 $assert( 'session schema pins external orchestrator persistence', array( 'external-orchestrator' ) === ( $ability['output_schema']['properties']['session']['properties']['persistence']['enum'] ?? array() ) && str_contains( $ability['output_schema']['properties']['session']['properties']['persistence']['description'] ?? '', 'does not persist' ) );
-$assert( 'session schema keeps durable lifecycle external', array( 'completed' ) === ( $ability['output_schema']['properties']['session']['properties']['status']['enum'] ?? array() ) && str_contains( $ability['output_schema']['properties']['session']['properties']['status']['description'] ?? '', 'external orchestrator' ) );
+$assert( 'session schema keeps durable lifecycle external', array( 'ready', 'completed' ) === ( $ability['output_schema']['properties']['session']['properties']['status']['enum'] ?? array() ) && str_contains( $ability['output_schema']['properties']['session']['properties']['status']['description'] ?? '', 'external orchestrator' ) );
 $assert( 'ability exposes preview configuration schema', 'integer' === ( $ability['input_schema']['properties']['preview_port']['type'] ?? '' ) && 'string' === ( $ability['input_schema']['properties']['preview_bind']['type'] ?? '' ) && 'string' === ( $ability['input_schema']['properties']['preview_public_url']['type'] ?? '' ) );
 $assert( 'ability exposes strict remediation outcome schema', isset( $ability['output_schema']['properties']['outcome']['properties']['kind']['enum'] ) && in_array( 'provider_error', $ability['output_schema']['properties']['outcome']['properties']['kind']['enum'], true ) );
 $assert( 'ability omits raw code input', ! isset( $ability['input_schema']['properties']['code'] ) && ! isset( $ability['input_schema']['properties']['code_file'] ) );
@@ -390,6 +391,7 @@ $assert( 'browser Playground session schema is stable', ! is_wp_error( $browser_
 $assert( 'browser Playground session pins browser execution', ! is_wp_error( $browser_session ) && 'browser-playground' === ( $browser_session['execution'] ?? '' ) );
 $assert( 'browser Playground session identifies disposable execution scope', ! is_wp_error( $browser_session ) && 'disposable-playground' === ( $browser_session['execution_scope'] ?? '' ) && 'disposable-playground' === ( $browser_session['session']['execution_scope'] ?? '' ) );
 $assert( 'browser Playground session identifies sandbox permission model', ! is_wp_error( $browser_session ) && 'sandbox-bypass' === ( $browser_session['permission_model'] ?? '' ) && 'sandbox-bypass' === ( $browser_session['session']['permission_model'] ?? '' ) );
+$assert( 'browser Playground session emits canonical sandbox session envelope', ! is_wp_error( $browser_session ) && 'wp-codebox/sandbox-session/v1' === ( $browser_session['session']['schema'] ?? '' ) && 'browser-session-123' === ( $browser_session['session']['id'] ?? '' ) && 'ready' === ( $browser_session['session']['status'] ?? '' ) && 'external-orchestrator' === ( $browser_session['session']['persistence'] ?? '' ) );
 $assert( 'browser Playground session includes Playground client URLs', ! is_wp_error( $browser_session ) && str_contains( $browser_session['playground']['client_module_url'] ?? '', 'playground.automattic.ai' ) && str_contains( $browser_session['playground']['remote_url'] ?? '', 'playground.automattic.ai' ) );
 $assert( 'browser Playground session includes default blueprint', ! is_wp_error( $browser_session ) && true === ( $browser_session['playground']['blueprint']['features']['networking'] ?? false ) && is_array( $browser_session['playground']['blueprint']['steps'] ?? null ) );
 $assert( 'browser Playground session defaults to latest WordPress and PHP', ! is_wp_error( $browser_session ) && 'latest' === ( $browser_session['playground']['blueprint']['preferredVersions']['wp'] ?? '' ) && 'latest' === ( $browser_session['playground']['blueprint']['preferredVersions']['php'] ?? '' ) );
@@ -407,6 +409,7 @@ $assert( 'browser Playground session exposes artifact URL paths', ! is_wp_error(
 $assert( 'browser Playground session exposes preview URL', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['playground']['preview_url'] ?? '' ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['preview_url'] ?? '' ) );
 $assert( 'browser Playground session normalizes task input lists', ! is_wp_error( $browser_session ) && array( 'filesystem-write' ) === ( $browser_session['task_input']['allowed_tools'] ?? array() ) );
 $assert( 'browser Playground session returns canonical task input metadata', ! is_wp_error( $browser_session ) && 'wp-codebox/task-input/v1' === ( $browser_session['task_input']['schema'] ?? '' ) && 1 === ( $browser_session['task_input']['version'] ?? 0 ) );
+$assert( 'browser Playground session exposes canonical task string', ! is_wp_error( $browser_session ) && 'Prepare a Studio Web browser preview.' === ( $browser_session['task'] ?? '' ) );
 
 $browser_parent_only_tool = call_user_func(
 	$browser_session_ability['execute_callback'],
@@ -926,6 +929,15 @@ $assert( 'runner normalizes task input lists', ! is_wp_error( $structured_result
 $assert( 'runner returns canonical structured task input shape', ! is_wp_error( $structured_result ) && array_key_exists( 'context', $structured_result['task_input'] ?? array() ) && 1 === ( $structured_result['task_input']['version'] ?? 0 ) );
 $assert( 'runner passes structured task contract to recipe', str_contains( $captured_recipe, 'wp-codebox/task-input/v1' ) && str_contains( $captured_recipe, 'allowed_tools' ) );
 $assert( 'runner leaves preview config unset by default', ! str_contains( $captured_command, '--preview-port' ) && ! str_contains( $captured_command, '--preview-bind' ) && ! str_contains( $captured_command, '--preview-public-url' ) );
+
+$host_browser_equivalent_input = array(
+	'goal'               => 'Prepare a Studio Web browser preview.',
+	'target'             => array( 'kind' => 'static-site' ),
+	'allowed_tools'      => array( 'filesystem-write', 'filesystem-write', '' ),
+	'expected_artifacts' => array( 'static-site' ),
+);
+$host_browser_equivalent_task = WP_Codebox_Agent_Task::normalize_input( $host_browser_equivalent_input );
+$assert( 'host and browser preparation share task input normalization', ! is_wp_error( $host_browser_equivalent_task ) && array_intersect_key( $browser_session['task_input'] ?? array(), $host_browser_equivalent_task ) === $host_browser_equivalent_task );
 
 $remediation_artifact_run = function ( string $name, array $files ): array {
 	$directory = sys_get_temp_dir() . '/wp-codebox-remediation-artifact-' . $name . '-' . uniqid( '', true );
