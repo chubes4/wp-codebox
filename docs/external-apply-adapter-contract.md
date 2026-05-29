@@ -4,6 +4,12 @@ WP Codebox owns the sandbox and artifact boundary. A parent control plane owns
 the product-specific apply-back adapter, such as opening a branch and pull
 request in an external system.
 
+Use `wp-codebox/stage-artifact-apply` for normal user-facing review flows. It
+creates a Data Machine pending action and resolves approved actions through the
+same validated apply path. Use `wp-codebox/apply-approved-artifact` directly only
+for adapter integration tests or trusted lower-level control-plane code that
+already owns approval and audit UX.
+
 ## Boundary
 
 ```text
@@ -30,17 +36,22 @@ WP Codebox does not interpret those fields or call the adapter's system directly
 ## Adapter Result
 
 An adapter should return product metadata that the parent control plane can audit
-outside WP Codebox:
+outside WP Codebox. WP Codebox requires the typed
+`wp-codebox/apply-result/v1` result schema; malformed results fail the apply and
+are recorded in `apply-audit.jsonl` as adapter failures.
 
 ```json
 {
+  "schema": "wp-codebox/apply-result/v1",
   "adapter": "parent-control-plane",
-  "artifact_id": "artifact-bundle-sha256-...",
-  "artifact_content_digest": "...",
-  "patch_sha256": "...",
+  "status": "pr-opened",
+  "target": { "repo": "example/example-plugin", "branch": "codebox/apply-generated-file" },
+  "applied_files": ["generated.txt"],
   "branch": "codebox/apply-generated-file",
   "commit": "abc1234",
-  "pr_url": "https://github.com/example/example-plugin/pull/123"
+  "commit_url": "https://github.com/example/example-plugin/commit/abc1234",
+  "pr_url": "https://github.com/example/example-plugin/pull/123",
+  "audit_reference": "external-apply-record:123"
 }
 ```
 

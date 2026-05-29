@@ -1285,15 +1285,16 @@ $assert( 'pending artifact apply rejects malformed references before staging', i
 
 $GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function ( mixed $value, array $payload ): array {
 	return array(
-		'adapter'                 => 'test-adapter',
-		'artifact_id'             => $payload['artifact_id'],
-		'patch_sha256'            => $payload['patch_sha256'],
-		'artifact_content_digest' => $payload['artifact_content_digest'],
-		'patch_contains'          => str_contains( $payload['patch'], 'cooked' ),
-		'patch_contains_unsafe'   => str_contains( $payload['patch'], 'unsafe' ),
-		'patch'                   => $payload['patch'],
-		'access_token'            => 'secret-token-value',
-		'pr_url'                  => 'https://github.com/chubes4/wp-codebox/pull/999',
+		'schema'          => 'wp-codebox/apply-result/v1',
+		'adapter'         => 'test-adapter',
+		'status'          => 'pr-opened',
+		'target'          => is_array( $payload['apply_target'] ?? null ) ? $payload['apply_target'] : array( 'repo' => 'chubes4/wp-codebox' ),
+		'applied_files'   => array( 'generated.txt' ),
+		'commit'          => 'abc1234',
+		'pr_url'          => 'https://github.com/chubes4/wp-codebox/pull/999',
+		'audit_reference' => 'external-apply-record:test-999',
+		'patch'           => $payload['patch'],
+		'access_token'    => 'secret-token-value',
 	);
 };
 $applied = $artifacts->apply_approved(
@@ -1302,9 +1303,13 @@ $applied = $artifacts->apply_approved(
 		'artifact_id'     => $artifact_id,
 		'approved_files'  => array( '/wordpress/wp-content/plugins/example/generated.txt' ),
 		'approver'        => 'site-user:1',
+		'apply_target'    => array(
+			'repo'   => 'chubes4/wp-codebox',
+			'branch' => 'codebox/test-adapter',
+		),
 	)
 );
-$assert( 'approved artifact apply delegates filtered patch', ! is_wp_error( $applied ) && true === ( $applied['result']['patch_contains'] ?? false ) && false === ( $applied['result']['patch_contains_unsafe'] ?? true ) && hash( 'sha256', $approved_patch_diff ) === ( $applied['patch_sha256'] ?? '' ) && $content_digest === ( $applied['content_digest'] ?? '' ) );
+$assert( 'approved artifact apply returns typed adapter result', ! is_wp_error( $applied ) && 'wp-codebox/apply-result/v1' === ( $applied['result']['schema'] ?? '' ) && 'test-adapter' === ( $applied['result']['adapter'] ?? '' ) && 'pr-opened' === ( $applied['result']['status'] ?? '' ) && array( 'generated.txt' ) === ( $applied['result']['applied_files'] ?? array() ) && array( 'repo' => 'chubes4/wp-codebox', 'branch' => 'codebox/test-adapter' ) === ( $applied['result']['target'] ?? array() ) && hash( 'sha256', $approved_patch_diff ) === ( $applied['patch_sha256'] ?? '' ) && $content_digest === ( $applied['content_digest'] ?? '' ) );
 
 $captured_stage_args = array();
 $GLOBALS['wp_codebox_filters']['wp_codebox_stage_pending_apply_artifact'] = function ( mixed $value, array $stage_args ) use ( &$captured_stage_args ): array {
@@ -1356,7 +1361,25 @@ $success_encoded = isset( $audit_lines[0] ) ? $audit_lines[0] : '';
 $assert( 'approved artifact apply writes success audit record', is_array( $success_audit ) && 'wp-codebox/apply-audit/v1' === ( $success_audit['schema'] ?? '' ) && 'success' === ( $success_audit['status'] ?? '' ) );
 $assert( 'success audit records reviewed principals and files', 'chat:user-7' === ( $success_audit['requester'] ?? '' ) && 'site-user:1' === ( $success_audit['approver'] ?? '' ) && array( '/wordpress/wp-content/plugins/example/generated.txt' ) === ( $success_audit['approved_files'] ?? array() ) );
 $assert( 'success audit records applied patch digest and adapter metadata', $artifact_id === ( $success_audit['artifact_id'] ?? '' ) && $content_digest === ( $success_audit['content_digest'] ?? '' ) && hash( 'sha256', $approved_patch_diff ) === ( $success_audit['patch_sha256'] ?? '' ) && 'test-adapter' === ( $success_audit['adapter'] ?? '' ) && 'https://github.com/chubes4/wp-codebox/pull/999' === ( $success_audit['result']['pr_url'] ?? '' ) );
-$assert( 'success audit excludes raw patch body and secrets', ! str_contains( $success_encoded, 'diff --git' ) && ! str_contains( $success_encoded, 'secret-token-value' ) && '[redacted]' === ( $success_audit['result']['patch'] ?? '' ) && '[redacted]' === ( $success_audit['result']['access_token'] ?? '' ) );
+$assert( 'success audit excludes raw patch body and secrets', ! str_contains( $success_encoded, 'diff --git' ) && ! str_contains( $success_encoded, 'secret-token-value' ) && ! array_key_exists( 'patch', $success_audit['result'] ?? array() ) && ! array_key_exists( 'access_token', $success_audit['result'] ?? array() ) );
+
+$GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function (): array {
+	return array(
+		'adapter' => 'malformed-adapter',
+		'pr_url'  => 'https://github.com/chubes4/wp-codebox/pull/998',
+	);
+};
+$malformed_apply = $artifacts->apply_approved(
+	array(
+		'artifacts_path'  => $artifact_root,
+		'artifact_id'     => $artifact_id,
+		'approved_files'  => array( '/wordpress/wp-content/plugins/example/generated.txt' ),
+		'approver'        => 'site-user:3',
+	)
+);
+$audit_lines      = is_file( $audit_path ) ? array_values( array_filter( explode( "\n", trim( (string) file_get_contents( $audit_path ) ) ) ) ) : array();
+$malformed_audit  = isset( $audit_lines[2] ) ? json_decode( $audit_lines[2], true ) : array();
+$assert( 'approved artifact rejects malformed adapter result', is_wp_error( $malformed_apply ) && 'wp_codebox_apply_result_invalid' === $malformed_apply->get_error_code() && is_array( $malformed_audit ) && 'failure' === ( $malformed_audit['status'] ?? '' ) && 'wp_codebox_apply_result_invalid' === ( $malformed_audit['error']['code'] ?? '' ) );
 
 $GLOBALS['wp_codebox_filters']['wp_codebox_apply_approved_artifact'] = function (): WP_Error {
 	return new WP_Error( 'wp_codebox_adapter_failed', 'Adapter failed to apply artifact.', array( 'status' => 502, 'adapter' => 'test-adapter', 'patch' => 'diff --git should not persist', 'password' => 'secret-password-value' ) );
@@ -1370,8 +1393,8 @@ $failed_apply = $artifacts->apply_approved(
 	)
 );
 $audit_lines   = is_file( $audit_path ) ? array_values( array_filter( explode( "\n", trim( (string) file_get_contents( $audit_path ) ) ) ) ) : array();
-$failure_audit = isset( $audit_lines[2] ) ? json_decode( $audit_lines[2], true ) : array();
-$failure_encoded = isset( $audit_lines[2] ) ? $audit_lines[2] : '';
+$failure_audit = isset( $audit_lines[3] ) ? json_decode( $audit_lines[3], true ) : array();
+$failure_encoded = isset( $audit_lines[3] ) ? $audit_lines[3] : '';
 $assert( 'approved artifact apply writes adapter failure audit record', is_wp_error( $failed_apply ) && is_array( $failure_audit ) && 'failure' === ( $failure_audit['status'] ?? '' ) && 'test-adapter' === ( $failure_audit['adapter'] ?? '' ) && 'wp_codebox_adapter_failed' === ( $failure_audit['error']['code'] ?? '' ) );
 $assert( 'failure audit records approver and excludes raw patch body and secrets', 'site-user:2' === ( $failure_audit['approver'] ?? '' ) && ! str_contains( $failure_encoded, 'diff --git' ) && ! str_contains( $failure_encoded, 'secret-password-value' ) && '[redacted]' === ( $failure_audit['error']['data']['patch'] ?? '' ) && '[redacted]' === ( $failure_audit['error']['data']['password'] ?? '' ) );
 

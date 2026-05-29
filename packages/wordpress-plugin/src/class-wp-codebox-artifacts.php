@@ -12,6 +12,7 @@ final class WP_Codebox_Artifacts {
 	private const LIST_SCHEMA  = 'wp-codebox/artifact-list/v1';
 	private const GET_SCHEMA   = 'wp-codebox/artifact/v1';
 	private const APPLY_SCHEMA = 'wp-codebox/artifact-apply/v1';
+	private const APPLY_RESULT_SCHEMA = 'wp-codebox/apply-result/v1';
 	private const APPLY_AUDIT_SCHEMA = 'wp-codebox/apply-audit/v1';
 	private const VERIFICATION_SCHEMA = 'wp-codebox/artifact-bundle-verification/v1';
 	private const GENERIC_VERIFIER_ISSUE_URL = 'https://github.com/chubes4/wp-codebox/issues/176';
@@ -156,6 +157,7 @@ final class WP_Codebox_Artifacts {
 			'artifact'                => $bundle,
 			'approved_files'          => $approved_files,
 			'approver'                => $input['approver'] ?? null,
+			'apply_target'            => is_array( $input['apply_target'] ?? null ) ? $input['apply_target'] : null,
 			'patch'                   => $patch,
 			'patch_sha256'            => hash( 'sha256', $patch ),
 			'artifact_content_digest' => $content_digest,
@@ -173,6 +175,12 @@ final class WP_Codebox_Artifacts {
 			return $result;
 		}
 
+		$result = $this->normalize_apply_result( $result );
+		if ( is_wp_error( $result ) ) {
+			$this->record_apply_audit( $root, $bundle, $approved_files, $payload, null, $result );
+			return $result;
+		}
+
 		$this->record_apply_audit( $root, $bundle, $approved_files, $payload, $result, null );
 
 		return array(
@@ -185,6 +193,75 @@ final class WP_Codebox_Artifacts {
 			'verification'   => $verification,
 			'result'         => $result,
 		);
+	}
+
+	/** @return array<string,mixed>|WP_Error */
+	private function normalize_apply_result( mixed $result ): array|WP_Error {
+		if ( ! is_array( $result ) ) {
+			return $this->invalid_apply_result( 'result must be an object.' );
+		}
+
+		if ( self::APPLY_RESULT_SCHEMA !== ( $result['schema'] ?? null ) ) {
+			return $this->invalid_apply_result( 'result schema must be wp-codebox/apply-result/v1.' );
+		}
+
+		$adapter = trim( (string) ( $result['adapter'] ?? '' ) );
+		if ( '' === $adapter ) {
+			return $this->invalid_apply_result( 'result.adapter is required.' );
+		}
+
+		$status = trim( (string) ( $result['status'] ?? '' ) );
+		if ( '' === $status ) {
+			return $this->invalid_apply_result( 'result.status is required.', $adapter );
+		}
+
+		$target = $result['target'] ?? null;
+		if ( ! is_array( $target ) ) {
+			return $this->invalid_apply_result( 'result.target must be an object.', $adapter );
+		}
+
+		$applied_files = $result['applied_files'] ?? null;
+		if ( ! is_array( $applied_files ) ) {
+			return $this->invalid_apply_result( 'result.applied_files must be an array.', $adapter );
+		}
+
+		$applied_files = array_values(
+			array_filter(
+				array_map( static fn( $path ): string => trim( (string) $path ), $applied_files ),
+				static fn( string $path ): bool => '' !== $path
+			)
+		);
+
+		$audit_reference = trim( (string) ( $result['audit_reference'] ?? '' ) );
+		if ( '' === $audit_reference ) {
+			return $this->invalid_apply_result( 'result.audit_reference is required.', $adapter );
+		}
+
+		$normalized = array(
+			'schema'          => self::APPLY_RESULT_SCHEMA,
+			'adapter'         => $adapter,
+			'status'          => $status,
+			'target'          => $target,
+			'applied_files'   => $applied_files,
+			'audit_reference' => $audit_reference,
+		);
+
+		foreach ( array( 'commit', 'commit_url', 'pr_url', 'branch' ) as $key ) {
+			if ( isset( $result[ $key ] ) && '' !== trim( (string) $result[ $key ] ) ) {
+				$normalized[ $key ] = (string) $result[ $key ];
+			}
+		}
+
+		return $normalized;
+	}
+
+	private function invalid_apply_result( string $message, ?string $adapter = null ): WP_Error {
+		$data = array( 'status' => 502 );
+		if ( null !== $adapter && '' !== $adapter ) {
+			$data['adapter'] = $adapter;
+		}
+
+		return new WP_Error( 'wp_codebox_apply_result_invalid', 'Apply adapter returned an invalid result: ' . $message, $data );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */

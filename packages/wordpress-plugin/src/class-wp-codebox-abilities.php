@@ -413,7 +413,7 @@ final class WP_Codebox_Abilities {
 				'wp-codebox/apply-approved-artifact',
 				array(
 					'label'               => 'Apply Approved WP Codebox Artifact',
-					'description'         => 'Validate an approved canonical artifact patch and hand it to the configured apply-back adapter.',
+					'description'         => 'Low-level adapter/test hook that validates an approved canonical artifact patch, delegates to the configured apply-back adapter, and returns wp-codebox/apply-result/v1.',
 					'category'            => 'wp-codebox',
 					'input_schema'        => array(
 						'type'       => 'object',
@@ -430,6 +430,10 @@ final class WP_Codebox_Abilities {
 									'type'        => 'string',
 									'description' => 'Parent-site approver principal for audit records.',
 								),
+								'apply_target'   => array(
+									'type'        => 'object',
+									'description' => 'Optional parent-control-plane target metadata consumed by the apply adapter.',
+								),
 							)
 						),
 					),
@@ -444,7 +448,7 @@ final class WP_Codebox_Abilities {
 				'wp-codebox/stage-artifact-apply',
 				array(
 					'label'               => 'Stage WP Codebox Artifact Apply',
-					'description'         => 'Stage a reviewed WP Codebox artifact apply-back request through Data Machine pending actions.',
+					'description'         => 'Preferred user-facing API: stage a reviewed WP Codebox artifact apply-back request through Data Machine pending actions before resolving via apply-approved-artifact.',
 					'category'            => 'wp-codebox',
 					'input_schema'        => array(
 						'type'       => 'object',
