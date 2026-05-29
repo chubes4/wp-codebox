@@ -141,6 +141,7 @@ function get_posts( array $args ): array {
 function get_terms( array $args ): array { return array( new WP_Term( 3, 'category', 'seed-category', 'Seed Category' ) ); }
 function get_users( array $args ): array { return array( new WP_User( 11, 'Private User', array( 'editor' ) ) ); }
 
+require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-task-input-contract.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sandbox-runner.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-artifacts.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-data-machine-pending-actions.php';
@@ -192,6 +193,15 @@ $stable_json = function ( mixed $value ) use ( &$stable_json ): string {
 
 	return '{' . implode( ',', $parts ) . '}';
 };
+
+$task_input_fixtures = json_decode( (string) file_get_contents( __DIR__ . '/fixtures/task-input-normalization.json' ), true );
+$task_input_fixtures = is_array( $task_input_fixtures ) ? $task_input_fixtures : array();
+$task_input_fixture_by_name = array();
+foreach ( $task_input_fixtures as $fixture ) {
+	if ( is_array( $fixture ) && isset( $fixture['name'] ) ) {
+		$task_input_fixture_by_name[ (string) $fixture['name'] ] = $fixture;
+	}
+}
 
 $manifest_self_hash = function ( array $manifest ) use ( $stable_json ): string {
 	foreach ( $manifest['files'] as &$file ) {
@@ -276,6 +286,7 @@ $assert( 'run-agent-task ability registered', is_array( $ability ) );
 $assert( 'ability is REST visible', true === ( $ability['meta']['show_in_rest'] ?? false ) );
 $assert( 'ability accepts goal or legacy task', array( 'goal' ) === ( $ability['input_schema']['anyOf'][0]['required'] ?? array() ) && array( 'task' ) === ( $ability['input_schema']['anyOf'][1]['required'] ?? array() ) );
 $assert( 'ability exposes task target schema', isset( $ability['input_schema']['properties']['target']['properties']['kind'] ) );
+$assert( 'ability exposes canonical task input metadata schema', 'wp-codebox/task-input/v1' === ( $ability['output_schema']['properties']['task_input']['properties']['schema']['const'] ?? '' ) && 1 === ( $ability['output_schema']['properties']['task_input']['properties']['version']['const'] ?? 0 ) );
 $assert( 'ability exposes allowed tools schema', 'array' === ( $ability['input_schema']['properties']['allowed_tools']['type'] ?? '' ) );
 $assert( 'ability exposes expected artifacts schema', 'array' === ( $ability['input_schema']['properties']['expected_artifacts']['type'] ?? '' ) );
 $assert( 'ability exposes policy and context schema', 'object' === ( $ability['input_schema']['properties']['policy']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['context']['type'] ?? '' ) );
@@ -383,6 +394,7 @@ $assert( 'browser Playground session exposes artifact write paths', ! is_wp_erro
 $assert( 'browser Playground session exposes artifact URL paths', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['files'][0]['url_path'] ?? '' ) );
 $assert( 'browser Playground session exposes preview URL', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['playground']['preview_url'] ?? '' ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['preview_url'] ?? '' ) );
 $assert( 'browser Playground session normalizes task input lists', ! is_wp_error( $browser_session ) && array( 'filesystem-write' ) === ( $browser_session['task_input']['allowed_tools'] ?? array() ) );
+$assert( 'browser Playground session returns canonical task input metadata', ! is_wp_error( $browser_session ) && 'wp-codebox/task-input/v1' === ( $browser_session['task_input']['schema'] ?? '' ) && 1 === ( $browser_session['task_input']['version'] ?? 0 ) );
 
 $browser_parent_only_tool = call_user_func(
 	$browser_session_ability['execute_callback'],
@@ -616,6 +628,8 @@ $assert( 'runner returns orchestrator correlation and artifact refs', ! is_wp_er
 $assert( 'runner returns public preview URL in session artifact metadata', ! is_wp_error( $result ) && 'https://preview.example.test/session-123/' === ( $result['session']['artifacts']['preview_url'] ?? '' ) && 'https://preview.example.test/session-123/' === ( $result['run']['artifacts']['preview']['url'] ?? '' ) );
 $assert( 'runner surfaces normalized agent result summary', ! is_wp_error( $result ) && 'wp-codebox/agent-result/v1' === ( $result['agent_result']['schema'] ?? '' ) && false === ( $result['agent_result']['actionable'] ?? true ) && 'no_file_changes' === ( $result['agent_result']['noOpReason'] ?? '' ) && 'files/transcript.json' === ( $result['agent_result']['transcript']['artifact'] ?? '' ) );
 $assert( 'runner returns normalized task input for legacy task', ! is_wp_error( $result ) && 'wp-codebox/task-input/v1' === ( $result['task_input']['schema'] ?? '' ) && 'Run a chat-requested sandbox task.' === ( $result['task_input']['goal'] ?? '' ) );
+$legacy_task_fixture = $task_input_fixture_by_name['legacy task maps to canonical goal with empty optionals']['normalized'] ?? array();
+$assert( 'runner legacy task matches shared normalization fixture', ! is_wp_error( $result ) && $legacy_task_fixture === ( $result['task_input'] ?? array() ) );
 $assert( 'runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
 $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node' ) && str_contains( $captured_command, 'wp-codebox.js' ) );
 $assert( 'runner passes preview hold to CLI', str_contains( $captured_command, '--preview-hold' ) && str_contains( $captured_command, "'30'" ) );
@@ -897,6 +911,7 @@ $structured_result = $runner->run(
 $assert( 'runner accepts structured task input', ! is_wp_error( $structured_result ) && 'Add a focused product feature.' === ( $structured_result['task_input']['goal'] ?? '' ) );
 $assert( 'runner preserves structured target', ! is_wp_error( $structured_result ) && 'plugin' === ( $structured_result['task_input']['target']['kind'] ?? '' ) );
 $assert( 'runner normalizes task input lists', ! is_wp_error( $structured_result ) && array( 'workspace.read', 'workspace.write', 'datamachine/workspace-read' ) === ( $structured_result['task_input']['allowed_tools'] ?? array() ) && array( 'patch', 'tests' ) === ( $structured_result['task_input']['expected_artifacts'] ?? array() ) );
+$assert( 'runner returns canonical structured task input shape', ! is_wp_error( $structured_result ) && array_key_exists( 'context', $structured_result['task_input'] ?? array() ) && 1 === ( $structured_result['task_input']['version'] ?? 0 ) );
 $assert( 'runner passes structured task contract to recipe', str_contains( $captured_recipe, 'wp-codebox/task-input/v1' ) && str_contains( $captured_recipe, 'allowed_tools' ) );
 $assert( 'runner leaves preview config unset by default', ! str_contains( $captured_command, '--preview-port' ) && ! str_contains( $captured_command, '--preview-bind' ) && ! str_contains( $captured_command, '--preview-public-url' ) );
 

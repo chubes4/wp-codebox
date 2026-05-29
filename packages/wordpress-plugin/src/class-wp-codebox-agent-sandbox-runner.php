@@ -12,7 +12,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 	private const SCHEMA = 'wp-codebox/agent-task-run/v1';
 	private const BATCH_SCHEMA = 'wp-codebox/agent-task-batch/v1';
 	private const SESSION_SCHEMA = 'wp-codebox/sandbox-session/v1';
-	private const TASK_INPUT_SCHEMA = 'wp-codebox/task-input/v1';
+	private const TASK_INPUT_SCHEMA = WP_Codebox_Task_Input_Contract::SCHEMA;
 	private const TOOL_DENIAL_SCHEMA = 'wp-codebox/tool-allowlist-denial/v1';
 	private const REMEDIATION_OUTCOME_SCHEMA = 'wp-codebox/agent-sandbox-remediation-outcome/v1';
 	private const SANDBOX_TOOL_POLICY_FILE = __DIR__ . '/generated-sandbox-datamachine-tool-policy.php';
@@ -780,33 +780,14 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	private function task_input( array $input ): array|WP_Error {
-		$goal = trim( (string) ( $input['goal'] ?? $input['task'] ?? '' ) );
-		if ( '' === $goal ) {
-			return new WP_Error( 'wp_codebox_task_missing', 'goal is required.', array( 'status' => 400 ) );
+		$task_input = WP_Codebox_Task_Input_Contract::normalize( $input );
+		if ( is_wp_error( $task_input ) ) {
+			return $task_input;
 		}
 
-		$task_input = array(
-			'schema' => self::TASK_INPUT_SCHEMA,
-			'goal'   => $goal,
-		);
-
-		foreach ( array( 'target', 'policy', 'context' ) as $field ) {
-			if ( isset( $input[ $field ] ) && is_array( $input[ $field ] ) ) {
-				$task_input[ $field ] = $input[ $field ];
-			}
-		}
-
-		foreach ( array( 'allowed_tools', 'expected_artifacts' ) as $field ) {
-			$values = $this->string_list( $input[ $field ] ?? array() );
-			if ( ! empty( $values ) ) {
-				if ( 'allowed_tools' === $field ) {
-					$tool_error = $this->validate_allowed_tools( $values );
-					if ( is_wp_error( $tool_error ) ) {
-						return $tool_error;
-					}
-				}
-				$task_input[ $field ] = $values;
-			}
+		$tool_error = $this->validate_allowed_tools( $task_input['allowed_tools'] );
+		if ( is_wp_error( $tool_error ) ) {
+			return $tool_error;
 		}
 
 		return $task_input;

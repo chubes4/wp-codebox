@@ -1,0 +1,53 @@
+[
+  {
+    "name": "legacy task maps to canonical goal with empty optionals",
+    "input": {
+      "task": " Run a chat-requested sandbox task. "
+    },
+    "normalized": {
+      "schema": "wp-codebox/task-input/v1",
+      "version": 1,
+      "goal": "Run a chat-requested sandbox task.",
+      "target": {},
+      "allowed_tools": [],
+      "expected_artifacts": [],
+      "policy": {},
+      "context": {}
+    }
+  },
+  {
+    "name": "structured goal deduplicates lists and preserves objects",
+    "input": {
+      "goal": " Add a focused product feature. ",
+      "target": {
+        "kind": "plugin",
+        "path": "wp-content/plugins/simple-plugin"
+      },
+      "allowed_tools": ["workspace.read", "workspace.write", "workspace.read", ""],
+      "expected_artifacts": ["patch", "tests", "patch"],
+      "policy": {
+        "applyBack": "reviewed"
+      },
+      "context": {
+        "issue": "https://github.com/chubes4/wp-codebox/issues/231"
+      }
+    },
+    "normalized": {
+      "schema": "wp-codebox/task-input/v1",
+      "version": 1,
+      "goal": "Add a focused product feature.",
+      "target": {
+        "kind": "plugin",
+        "path": "wp-content/plugins/simple-plugin"
+      },
+      "allowed_tools": ["workspace.read", "workspace.write"],
+      "expected_artifacts": ["patch", "tests"],
+      "policy": {
+        "applyBack": "reviewed"
+      },
+      "context": {
+        "issue": "https://github.com/chubes4/wp-codebox/issues/231"
+      }
+    }
+  }
+]
