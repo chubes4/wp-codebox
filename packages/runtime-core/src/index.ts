@@ -300,6 +300,7 @@ export interface WorkspaceRecipeWorkspaceSeed {
   slug?: string
   name?: string
   source?: string
+  excludePaths?: string[]
 }
 
 export interface WorkspaceRecipeWorkspace {

@@ -608,32 +608,37 @@ const DEFAULT_WORDPRESS_VERSION = "7.0"
 const ALLOW_NETWORK_DOWNLOADS_ENV = "WP_CODEBOX_ALLOW_NETWORK_DOWNLOADS"
 const execFileAsync = promisify(execFile)
 
-const DEFAULT_WORKSPACE_SEED_EXCLUDED_NAMES = new Set([
-  ".git",
-  ".homeboy",
-  ".homeboy-bin",
-  ".homeboy-build",
-  ".datamachine",
-  "node_modules",
-  "target",
-  "vendor",
-])
+function normalizedWorkspaceSeedExcludePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "")
+}
 
-function shouldCopyWorkspaceSeedEntry(sourceRoot: string, entry: string): boolean {
+function workspaceSeedExcludeMatches(relativePath: string, excludePath: string): boolean {
+  const normalizedRelativePath = normalizedWorkspaceSeedExcludePath(relativePath)
+  const normalizedExcludePath = normalizedWorkspaceSeedExcludePath(excludePath)
+  if (!normalizedExcludePath) {
+    return false
+  }
+
+  if (normalizedExcludePath.endsWith("*")) {
+    return normalizedRelativePath.startsWith(normalizedExcludePath.slice(0, -1))
+  }
+
+  return normalizedRelativePath === normalizedExcludePath || normalizedRelativePath.startsWith(`${normalizedExcludePath}/`)
+}
+
+function shouldCopyWorkspaceSeedEntry(sourceRoot: string, entry: string, excludePaths: string[] = []): boolean {
   const relativePath = relative(sourceRoot, entry)
   if (!relativePath) {
     return true
   }
 
-  return !relativePath.split(/[\\/]+/).some((part) => {
-    return DEFAULT_WORKSPACE_SEED_EXCLUDED_NAMES.has(part) || part === ".DS_Store" || part === ".env" || part.startsWith(".env.") || part.startsWith("._")
-  })
+  return !excludePaths.some((excludePath) => workspaceSeedExcludeMatches(relativePath, excludePath))
 }
 
-async function copyWorkspaceSeedDirectory(source: string, target: string): Promise<void> {
+async function copyWorkspaceSeedDirectory(source: string, target: string, excludePaths: string[] = []): Promise<void> {
   await cp(source, target, {
     recursive: true,
-    filter: (entry) => shouldCopyWorkspaceSeedEntry(source, entry),
+    filter: (entry) => shouldCopyWorkspaceSeedEntry(source, entry, excludePaths),
   })
 }
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -951,6 +956,7 @@ const workspaceRecipeJsonSchema: RecipeSchemaOutput["jsonSchema"] = {
         slug: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
         name: { type: "string" },
         source: { type: "string" },
+        excludePaths: { type: "array", items: { type: "string" } },
       },
     },
     extraPlugin: {
@@ -4819,8 +4825,8 @@ async function prepareRecipeWorkspace(workspace: WorkspaceRecipeWorkspace, recip
   const baselineDirectory = await mkdtemp(join(tmpdir(), `wp-codebox-${slug}-baseline-`))
   if (workspace.seed.type === "directory") {
     const source = resolve(recipeDirectory, workspace.seed.source ?? "")
-    await copyWorkspaceSeedDirectory(source, directory)
-    await copyWorkspaceSeedDirectory(source, baselineDirectory)
+    await copyWorkspaceSeedDirectory(source, directory, workspace.seed.excludePaths)
+    await copyWorkspaceSeedDirectory(source, baselineDirectory, workspace.seed.excludePaths)
     await ensureStandaloneGitPrimary(directory)
     return { source: directory, baselineSource: baselineDirectory, cleanupPaths: [directory, baselineDirectory] }
   }
