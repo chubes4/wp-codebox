@@ -1,9 +1,12 @@
 # Architecture Vision
 
-WP Codebox is the portable sandbox boundary for WordPress coding-agent work. It
-lets a parent product start a disposable WordPress Playground runtime, mount the
-target code and agent stack, collect reviewable artifacts, then apply or discard
-those artifacts outside the sandbox.
+WP Codebox is the portable sandbox boundary for WordPress-compatible
+coding-agent work. It does not fundamentally care whether the parent
+orchestrator runs inside WordPress. It can be driven from a WordPress plugin,
+CLI, CI job, hosted service, or external agent, then start a disposable
+WordPress Playground runtime, mount the target code and agent stack, collect
+reviewable artifacts, and return those artifacts to the caller for apply or
+discard.
 
 ```text
 Parent control plane
@@ -24,11 +27,17 @@ the agent production access. A site owner, Studio user, CI job, eval runner, or
 chat surface can ask for a change; WP Codebox runs the work in Playground and
 returns evidence that the parent product can review.
 
-Example control planes include hosted WordPress products, local development
-tools, chat surfaces, CI jobs, GitHub Actions, Homeboy, and other host
-applications. They consume WP Codebox; they do not change the sandbox contract.
-wp-gym is an example implementation that can build evaluation workflows on top
-of the same generic sandbox contract.
+Example control planes include hosted WordPress products, non-WordPress web
+apps, local development tools, chat surfaces, CI jobs, GitHub Actions, Homeboy,
+and other host applications. They consume WP Codebox; they do not change the
+sandbox contract. wp-gym is an example implementation that can build evaluation
+workflows on top of the same generic sandbox contract.
+
+Studio Web is another product control plane: it orchestrates an in-browser WP
+Codebox Data Machine agent by calling WP Codebox's clean ability API. Studio Web
+does not make WP Codebox depend on Studio Web, and Studio Web itself does not
+own or embed Data Machine; Data Machine lives inside the sandboxed WP Codebox
+runtime when that task needs agent tools.
 
 ## Landed Contracts
 

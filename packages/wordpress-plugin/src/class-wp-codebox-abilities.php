@@ -1942,7 +1942,7 @@ flush_rewrite_rules();
 				),
 			),
 			'artifacts' => array(
-				'directory' => '/wordpress/wp-content/uploads/wp-codebox/artifacts',
+				'directory' => self::browser_artifact_base_path( $playground ),
 			),
 			'browser'  => array(
 				'execution'   => 'php-wasm',

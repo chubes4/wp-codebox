@@ -868,6 +868,15 @@ Current enforcement:
 
 ## Boundaries
 
+WP Codebox is an embeddable sandbox/runtime API, not a product control plane and
+not a WordPress-only application. It is WordPress-compatible, with a WordPress
+plugin ability surface for host sites, but the core contract should also make
+sense when driven by CLIs, CI jobs, hosted services, or other external agents.
+Product orchestrators such as Studio Web may drive WP Codebox through its
+ability surface, pass caller-owned session/orchestrator metadata, and choose
+product artifact paths, but those consumers must not leak into WP Codebox
+defaults.
+
 WP Codebox owns:
 
 - Disposable runtime lifecycle.
