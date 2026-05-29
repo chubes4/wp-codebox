@@ -34,6 +34,12 @@ writeFileSync(recipePath, `${JSON.stringify({
           type: "directory",
           source: "./source",
           slug: "seed-source",
+          excludePaths: [
+            ".git",
+            ".env*",
+            "node_modules",
+            "target",
+          ],
         },
         target: "/workspace/seed-source",
       },
