@@ -24,6 +24,24 @@ if ( ! class_exists( 'WP_Error' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_Post' ) ) {
+	class WP_Post {
+		public function __construct( public int $ID, public string $post_type, public string $post_status, public string $post_name, public string $post_title, public string $post_content = '', public string $post_excerpt = '', public string $post_mime_type = '' ) {}
+	}
+}
+
+if ( ! class_exists( 'WP_Term' ) ) {
+	class WP_Term {
+		public function __construct( public int $term_id, public string $taxonomy, public string $slug, public string $name, public string $description = '' ) {}
+	}
+}
+
+if ( ! class_exists( 'WP_User' ) ) {
+	class WP_User {
+		public function __construct( public int $ID, public string $display_name, public array $roles ) {}
+	}
+}
+
 if ( ! function_exists( 'is_wp_error' ) ) {
 	function is_wp_error( $thing ): bool { return $thing instanceof WP_Error; }
 }
@@ -89,6 +107,21 @@ function apply_filters( string $hook, mixed $value, mixed ...$args ): mixed {
 function is_multisite(): bool { return (bool) ( $GLOBALS['wp_codebox_is_multisite'] ?? false ); }
 function get_option( string $name, mixed $default = null ): mixed { return $GLOBALS['wp_codebox_options'][ $name ] ?? $default; }
 function get_site_option( string $name, mixed $default = null ): mixed { return $GLOBALS['wp_codebox_site_options'][ $name ] ?? $default; }
+function home_url( string $path = '' ): string { return 'https://parent.example.test' . $path; }
+function sanitize_key( string $key ): string { return strtolower( preg_replace( '/[^a-zA-Z0-9_\-]/', '', $key ) ?? '' ); }
+function sanitize_title( string $title ): string { return strtolower( preg_replace( '/[^a-zA-Z0-9_\-]/', '-', $title ) ?? '' ); }
+function sanitize_text_field( string $text ): string { return trim( preg_replace( '/[\r\n\t]+/', ' ', $text ) ?? '' ); }
+function absint( mixed $value ): int { return abs( (int) $value ); }
+function get_stylesheet(): string { return 'twentytwentyfive'; }
+function get_posts( array $args ): array {
+	if ( 'attachment' === ( $args['post_type'] ?? '' ) ) {
+		return array( new WP_Post( 5, 'attachment', 'inherit', 'seed-image', 'Seed Image', '', '', 'image/png' ) );
+	}
+
+	return array( new WP_Post( 7, 'page', 'publish', 'seed-page', 'Seed Page', '<!-- wp:paragraph --><p>Seeded</p><!-- /wp:paragraph -->' ) );
+}
+function get_terms( array $args ): array { return array( new WP_Term( 3, 'category', 'seed-category', 'Seed Category' ) ); }
+function get_users( array $args ): array { return array( new WP_User( 11, 'Private User', array( 'editor' ) ) ); }
 
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-agent-sandbox-runner.php';
 require __DIR__ . '/../packages/wordpress-plugin/src/class-wp-codebox-artifacts.php';
@@ -141,6 +174,7 @@ $assert( 'ability exposes allowed tools schema', 'array' === ( $ability['input_s
 $assert( 'ability exposes expected artifacts schema', 'array' === ( $ability['input_schema']['properties']['expected_artifacts']['type'] ?? '' ) );
 $assert( 'ability exposes policy and context schema', 'object' === ( $ability['input_schema']['properties']['policy']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['context']['type'] ?? '' ) );
 $assert( 'ability exposes generic mounts schema', 'array' === ( $ability['input_schema']['properties']['mounts']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['mounts']['items']['properties']['metadata']['type'] ?? '' ) );
+$assert( 'ability exposes bounded parent-site seed schema', 'array' === ( $ability['input_schema']['properties']['site_seeds']['type'] ?? '' ) && array( 'parent_site' ) === ( $ability['input_schema']['properties']['site_seeds']['items']['properties']['type']['enum'] ?? array() ) );
 $assert( 'ability exposes inheritance request schema', 'object' === ( $ability['input_schema']['properties']['inherit']['type'] ?? '' ) && 'array' === ( $ability['input_schema']['properties']['inherit']['properties']['connectors']['type'] ?? '' ) );
 $assert( 'ability exposes connector credential envelope schema', 'object' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['type'] ?? '' ) && 'array' === ( $ability['input_schema']['properties']['inherit']['properties']['credentials']['properties']['secrets']['type'] ?? '' ) );
 $assert( 'ability exposes external sandbox session schema', 'string' === ( $ability['input_schema']['properties']['sandbox_session_id']['type'] ?? '' ) && 'object' === ( $ability['input_schema']['properties']['orchestrator']['type'] ?? '' ) && 'object' === ( $ability['output_schema']['properties']['session']['type'] ?? '' ) );
@@ -396,6 +430,35 @@ $assert( 'runner recipe passes provider plugin path', str_contains( $captured_re
 $assert( 'runner recipe passes generic mount metadata', str_contains( $captured_recipe, 'example/editable-plugin' ) && str_contains( $captured_recipe, 'repo_root_relative_to_mount' ) );
 $assert( 'runner recipe passes secret env name only', str_contains( $captured_recipe, 'GITHUB_TOKEN' ) && ! str_contains( $captured_recipe, 'GITHUB_TOKEN=' ) );
 $assert( 'runner does not pass raw code options', ! str_contains( $captured_command, '--code ' ) && ! str_contains( $captured_command, '--code-file' ) );
+
+$GLOBALS['wp_codebox_options']['blogname'] = 'Parent Seed Site';
+$GLOBALS['wp_codebox_options']['active_plugins'] = array( 'agents-api/agents-api.php' );
+$seed_result = $runner->run(
+	array(
+		'goal'           => 'Run with a bounded parent-site seed.',
+		'artifacts_path' => $root . '/artifacts',
+		'site_seeds'    => array(
+			array(
+				'type'   => 'parent_site',
+				'name'   => 'parent-site-smoke',
+				'scopes' => array(
+					'posts'         => array( 'postTypes' => array( 'page' ), 'maxRecords' => 1 ),
+					'terms'         => array( 'taxonomies' => array( 'category' ), 'maxRecords' => 1 ),
+					'options'       => array( 'names' => array( 'blogname' ), 'maxRecords' => 1 ),
+					'users'         => array( 'roles' => array( 'editor' ), 'anonymize' => true, 'maxRecords' => 1 ),
+					'media'         => array( 'maxRecords' => 1 ),
+					'activePlugins' => true,
+					'activeTheme'   => true,
+				),
+			),
+		),
+	)
+);
+$seed_recipe = json_decode( $captured_recipe, true );
+$seed_path   = (string) ( $seed_recipe['inputs']['siteSeeds'][0]['source'] ?? '' );
+$assert( 'runner exports bounded parent-site seed as fixture', ! is_wp_error( $seed_result ) && 'fixture' === ( $seed_recipe['inputs']['siteSeeds'][0]['type'] ?? '' ) && 'json' === ( $seed_recipe['inputs']['siteSeeds'][0]['format'] ?? '' ) );
+$assert( 'runner cleans temporary parent-site seed fixture after run', ! is_wp_error( $seed_result ) && '' !== $seed_path && ! file_exists( $seed_path ) );
+$assert( 'runner preserves parent-site seed scope in recipe', ! is_wp_error( $seed_result ) && 1 === ( $seed_recipe['inputs']['siteSeeds'][0]['scopes']['posts']['maxRecords'] ?? 0 ) && true === ( $seed_recipe['inputs']['siteSeeds'][0]['scopes']['users']['anonymize'] ?? false ) );
 
 unset( $GLOBALS['wp_codebox_filters']['wp_codebox_component_paths'] );
 $plugin_native_result = $runner->run(
