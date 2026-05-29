@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
-import { RUNTIME_REFERENCE_MANIFEST_SCHEMA, createRuntime, runtimeReferenceManifestDigest, verifyArtifactBundle } from "@chubes4/wp-codebox-core"
+import { RUNTIME_REFERENCE_MANIFEST_SCHEMA, RUNTIME_REPLAY_REFERENCE_INDEX_SCHEMA, createRuntime, runtimeReferenceManifestDigest, runtimeReplayReferenceIndexDigest, verifyArtifactBundle } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 
 const execFileAsync = promisify(execFile)
@@ -62,6 +62,7 @@ try {
   const testResults = JSON.parse(await readFile(artifacts.testResultsPath, "utf8"))
   const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8"))
   const runtimeReferenceManifest = JSON.parse(await readFile(artifacts.runtimeReferenceManifestPath, "utf8"))
+  const runtimeReplayReferenceIndex = JSON.parse(await readFile(artifacts.runtimeReplayReferenceIndexPath, "utf8"))
   const contentDigest = createHash("sha256")
     .update("wp-codebox/artifact-content/v1\n")
     .update("files/changed-files.json\n")
@@ -85,6 +86,7 @@ try {
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/test-results.json" && file.kind === "test-results"))
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/review.json" && file.kind === "review"))
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-reference-manifest.json" && file.kind === "runtime-reference-manifest"))
+  assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-replay-index.json" && file.kind === "runtime-replay-index"))
   assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-evidence/run-attestation.json" && file.kind === "run-attestation"))
   const runtimeEvidence = metadata.artifacts.runtimeEvidence
   assert.match(runtimeEvidence["run-attestation"].sha256, /^[a-f0-9]{64}$/)
@@ -94,6 +96,7 @@ try {
     testResults: "files/test-results.json",
     review: "files/review.json",
     runtimeReferenceManifest: "files/runtime-reference-manifest.json",
+    runtimeReplayReferenceIndex: "files/runtime-replay-index.json",
     mountDiffs: "files/diffs.json",
     runtimeEvidence,
   })
@@ -141,6 +144,16 @@ try {
   assert.equal(review.evidence.changedFiles, "files/changed-files.json")
   assert.equal(review.evidence.testResults, "files/test-results.json")
   assert.equal(review.evidence.runtimeReferenceManifest, "files/runtime-reference-manifest.json")
+  assert.equal(runtimeReplayReferenceIndex.schema, RUNTIME_REPLAY_REFERENCE_INDEX_SCHEMA)
+  assert.equal(runtimeReplayReferenceIndex.artifactBundle.id, artifacts.id)
+  assert.equal(runtimeReplayReferenceIndex.artifactBundle.digest.value, artifacts.contentDigest)
+  assert.equal(runtimeReplayReferenceIndex.digest.value, runtimeReplayReferenceIndexDigest(runtimeReplayReferenceIndex).value)
+  assert.equal(runtimeReplayReferenceIndex.id, `runtime-replay-reference-index-sha256-${runtimeReplayReferenceIndex.digest.value}`)
+  assert.equal(runtimeReplayReferenceIndex.references.runtimeReferenceManifest.path, "files/runtime-reference-manifest.json")
+  assert.equal(runtimeReplayReferenceIndex.references.changedFiles.path, "files/changed-files.json")
+  assert.equal(runtimeReplayReferenceIndex.references.patch.path, "files/patch.diff")
+  assert.equal(runtimeReplayReferenceIndex.replay.status, "partial")
+  assert.equal(runtimeReplayReferenceIndex.snapshots.length, 0)
   assert.equal(runtimeReferenceManifest.schema, RUNTIME_REFERENCE_MANIFEST_SCHEMA)
   assert.equal(runtimeReferenceManifest.artifactBundle.id, artifacts.id)
   assert.equal(runtimeReferenceManifest.artifactBundle.digest.value, artifacts.contentDigest)

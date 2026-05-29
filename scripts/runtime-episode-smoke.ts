@@ -10,7 +10,9 @@ import {
   RUNTIME_EPISODE_OBSERVATION_SCHEMA,
   RUNTIME_EPISODE_SNAPSHOT_SCHEMA,
   RUNTIME_REFERENCE_MANIFEST_SCHEMA,
+  RUNTIME_REPLAY_REFERENCE_INDEX_SCHEMA,
   runtimeReferenceManifestDigest,
+  runtimeReplayReferenceIndexDigest,
   createRuntimeEpisode,
   validateRuntimeEpisodeTrace,
   verifyArtifactBundle,
@@ -118,23 +120,43 @@ try {
     assert.equal(metadata.provenance.task.kind, "runtime-episode-smoke")
     assert.ok(artifacts.runtimeEpisodeTracePath, "artifact bundle should expose runtimeEpisodeTracePath")
     assert.ok(artifacts.runtimeEpisodeEventsPath, "artifact bundle should expose runtimeEpisodeEventsPath")
+    assert.ok(artifacts.runtimeReplayReferenceIndexPath, "artifact bundle should expose runtimeReplayReferenceIndexPath")
     assert.equal(metadata.artifacts.runtimeEpisodeTrace, "files/runtime-episode-trace.json")
     assert.equal(metadata.artifacts.runtimeEpisodeEvents, "files/runtime-episode.jsonl")
+    assert.equal(metadata.artifacts.runtimeReplayReferenceIndex, "files/runtime-replay-index.json")
 
     const manifest = JSON.parse(await readFile(artifacts.manifestPath, "utf8"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode-trace.json" && file.kind === "runtime-episode-trace"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-episode.jsonl" && file.kind === "runtime-episode-events"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === httpObservation.artifactRefs?.[0].path && file.kind === "observation-artifact"))
     assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-reference-manifest.json" && file.kind === "runtime-reference-manifest"))
+    assert.ok(manifest.files.some((file: { path: string; kind: string }) => file.path === "files/runtime-replay-index.json" && file.kind === "runtime-replay-index"))
     const snapshotBundleEntry = manifest.files.find((file: { path: string; kind: string }) => file.path.startsWith("files/runtime-snapshots/") && file.kind === "runtime-snapshot-bundle")
     assert.ok(snapshotBundleEntry, "runtime snapshot bundle should be listed in manifest")
 
     const review = JSON.parse(await readFile(artifacts.reviewPath, "utf8"))
     assert.equal(review.evidence.runtimeEpisodeTrace, "files/runtime-episode-trace.json")
     assert.equal(review.evidence.runtimeReferenceManifest, "files/runtime-reference-manifest.json")
+    assert.equal(review.evidence.runtimeReplayReferenceIndex, "files/runtime-replay-index.json")
     assert.ok(review.progress.some((event: { component?: string; label?: string }) => event.component === "runtime-episode" && event.label === "Runtime episode trace persisted"))
 
     const referenceManifest = JSON.parse(await readFile(artifacts.runtimeReferenceManifestPath ?? "", "utf8"))
+    const replayIndex = JSON.parse(await readFile(artifacts.runtimeReplayReferenceIndexPath ?? "", "utf8"))
+    assert.equal(replayIndex.schema, RUNTIME_REPLAY_REFERENCE_INDEX_SCHEMA)
+    assert.equal(replayIndex.artifactBundle.id, artifacts.id)
+    assert.equal(replayIndex.references.trace.path, "files/runtime-episode-trace.json")
+    assert.equal(replayIndex.references.events.path, "files/runtime-episode.jsonl")
+    assert.equal(replayIndex.references.runtimeReferenceManifest.path, "files/runtime-reference-manifest.json")
+    assert.equal(replayIndex.references.observations.path, "observations.jsonl")
+    assert.equal(replayIndex.actions.length, 3)
+    assert.equal(replayIndex.observations.some((observation: { type: string }) => observation.type === "runtime-info"), true)
+    assert.equal(replayIndex.snapshots.length, 1)
+    assert.equal(replayIndex.snapshots[0].id, snapshot.id)
+    assert.equal(replayIndex.snapshots[0].replay.status, "partial-replay")
+    assert.ok(replayIndex.replay.instructions.some((instruction: string) => instruction.includes("references.trace")))
+    assert.ok(replayIndex.replay.limitations.some((limitation: string) => limitation.includes("not a complete WordPress database checkpoint")))
+    assert.equal(replayIndex.digest.value, runtimeReplayReferenceIndexDigest(replayIndex).value)
+    assert.equal(replayIndex.id, `runtime-replay-reference-index-sha256-${replayIndex.digest.value}`)
     assert.equal(referenceManifest.schema, RUNTIME_REFERENCE_MANIFEST_SCHEMA)
     assert.equal(referenceManifest.artifactBundle.id, artifacts.id)
     assert.equal(referenceManifest.artifactBundle.digest.value, artifacts.contentDigest)
