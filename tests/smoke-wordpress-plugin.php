@@ -122,6 +122,12 @@ function apply_filters( string $hook, mixed $value, mixed ...$args ): mixed {
 	return $filter;
 }
 function wp_parse_url( string $url ): array|false { return parse_url( $url ); }
+function wp_safe_remote_get( string $url, array $args = array() ): array|WP_Error {
+	$GLOBALS['wp_codebox_remote_gets'][] = array( 'url' => $url, 'args' => $args );
+	return $GLOBALS['wp_codebox_remote_responses'][ $url ] ?? new WP_Error( 'not_found', 'Remote URL not mocked.' );
+}
+function wp_remote_retrieve_response_code( array $response ): int { return (int) ( $response['response']['code'] ?? 0 ); }
+function wp_remote_retrieve_body( array $response ): string { return (string) ( $response['body'] ?? '' ); }
 function is_multisite(): bool { return (bool) ( $GLOBALS['wp_codebox_is_multisite'] ?? false ); }
 function get_option( string $name, mixed $default = null ): mixed { return $GLOBALS['wp_codebox_options'][ $name ] ?? $default; }
 function get_site_option( string $name, mixed $default = null ): mixed { return $GLOBALS['wp_codebox_site_options'][ $name ] ?? $default; }
@@ -368,6 +374,10 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI
 $GLOBALS['wp_codebox_filters']['wp_codebox_browser_plugin_allowed_hosts'] = array( 'example.test', 'downloads.wordpress.org', 'github.com' );
 $GLOBALS['wp_codebox_filters']['wp_codebox_browser_theme_allowed_hosts'] = array( 'example.test', 'downloads.wordpress.org' );
 $GLOBALS['wp_codebox_mock_abilities']['agents/chat'] = new WP_Ability();
+$GLOBALS['wp_codebox_remote_responses']['https://github.com/example/static-site-importer/releases/download/v1.0.0/static-site-importer.zip'] = array(
+	'response' => array( 'code' => 200 ),
+	'body'     => "PK\x03\x04server-packaged-plugin",
+);
 mkdir( $root . '/plugin-root/data-machine', 0777, true );
 mkdir( $root . '/plugin-root/data-machine-code', 0777, true );
 mkdir( $root . '/plugin-root/studio-web', 0777, true );
@@ -395,7 +405,8 @@ $browser_session = call_user_func(
 			'plugins'    => array(
 				array(
 					'slug'     => 'static-site-importer',
-					'url'      => 'https://example.test/static-site-importer.zip',
+					'url'      => 'https://github.com/example/static-site-importer/releases/download/v1.0.0/static-site-importer.zip',
+					'package'  => 'server',
 					'activate' => false,
 				),
 				array(
@@ -463,7 +474,7 @@ $assert( 'browser Playground session logs in before admin workflows', ! is_wp_er
 $assert( 'browser Playground session installs caller browser plugins without duplicating packaged components', ! is_wp_error( $browser_session ) && 'installPlugin' === ( $browser_session['playground']['blueprint']['steps'][1]['step'] ?? '' ) && 'https://example.test/agents-api.zip' === ( $browser_session['playground']['blueprint']['steps'][1]['pluginData']['url'] ?? '' ) && 1 === count( array_filter( $browser_session['plugins'], static fn( array $plugin ): bool => 'agents-api' === ( $plugin['slug'] ?? '' ) ) ) );
 $assert( 'browser Playground session packages required host runtime plugins', ! is_wp_error( $browser_session ) && str_starts_with( (string) ( $browser_session['plugins'][1]['url'] ?? '' ), 'https://parent.example.test/uploads/wp-codebox/browser-runtime-plugins/data-machine-' ) && str_starts_with( (string) ( $browser_session['plugins'][2]['url'] ?? '' ), 'https://parent.example.test/uploads/wp-codebox/browser-runtime-plugins/data-machine-code-' ) && 64 === strlen( (string) ( $browser_session['plugins'][1]['provenance']['sha256'] ?? '' ) ) );
 $assert( 'browser Playground session accepts structured runtime dependencies', ! is_wp_error( $browser_session ) && 'wp-codebox/browser-runtime-dependencies/v1' === ( $browser_session['runtime']['schema'] ?? '' ) && 6 === ( $browser_session['runtime']['summary']['plugins'] ?? 0 ) && 2 === ( $browser_session['runtime']['component_plugins'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['mu_plugins'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['themes'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['bootstrap'] ?? 0 ) );
-$assert( 'browser Playground session compiles structured runtime plugins after required components', ! is_wp_error( $browser_session ) && 'installPlugin' === ( $browser_session['playground']['blueprint']['steps'][4]['step'] ?? '' ) && 'https://example.test/static-site-importer.zip' === ( $browser_session['playground']['blueprint']['steps'][4]['pluginData']['url'] ?? '' ) && false === ( $browser_session['playground']['blueprint']['steps'][4]['options']['activate'] ?? true ) );
+$assert( 'browser Playground session server-packages remote runtime plugins after required components', ! is_wp_error( $browser_session ) && 'installPlugin' === ( $browser_session['playground']['blueprint']['steps'][4]['step'] ?? '' ) && str_starts_with( (string) ( $browser_session['playground']['blueprint']['steps'][4]['pluginData']['url'] ?? '' ), 'https://parent.example.test/uploads/wp-codebox/browser-runtime-plugins/static-site-importer-' ) && false === ( $browser_session['playground']['blueprint']['steps'][4]['options']['activate'] ?? true ) && 'runtime-plugin-remote-package' === ( $browser_session['plugins'][3]['provenance']['source'] ?? '' ) );
 $assert( 'browser Playground session packages declarative runtime plugin paths', ! is_wp_error( $browser_session ) && str_starts_with( (string) ( $browser_session['plugins'][4]['url'] ?? '' ), 'https://parent.example.test/uploads/wp-codebox/browser-runtime-plugins/studio-web-' ) && 64 === strlen( (string) ( $browser_session['plugins'][4]['provenance']['sha256'] ?? '' ) ) );
 $assert( 'browser Playground session compiles git directory runtime plugins', ! is_wp_error( $browser_session ) && 'git:directory' === ( $browser_session['playground']['blueprint']['steps'][6]['pluginData']['resource'] ?? '' ) && 'plugins/example-git-plugin' === ( $browser_session['playground']['blueprint']['steps'][6]['pluginData']['path'] ?? '' ) && 'example-git-plugin' === ( $browser_session['playground']['blueprint']['steps'][6]['options']['targetFolderName'] ?? '' ) );
 $assert( 'browser Playground session compiles mu-plugin runtime dependency', ! is_wp_error( $browser_session ) && 'runPHP' === ( $browser_session['playground']['blueprint']['steps'][7]['step'] ?? '' ) && str_contains( (string) ( $browser_session['playground']['blueprint']['steps'][7]['code'] ?? '' ), '/wordpress/wp-content/mu-plugins/example-review.php' ) );

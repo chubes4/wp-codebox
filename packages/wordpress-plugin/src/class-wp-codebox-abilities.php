@@ -1347,7 +1347,35 @@ final class WP_Codebox_Abilities {
 			}
 
 			$resource = (string) ( $plugin['resource'] ?? 'url' );
-			$path     = 'git:directory' === $resource ? '' : self::browser_clean_path( (string) ( $plugin['path'] ?? '' ) );
+			if ( 'server' === (string) ( $plugin['package'] ?? '' ) ) {
+				$slug = self::safe_key( (string) ( $plugin['slug'] ?? '' ) );
+				if ( '' === $slug ) {
+					return new WP_Error( 'wp_codebox_browser_plugin_slug_missing', 'Server-packaged browser plugin specs require a slug.', array( 'status' => 400, 'field' => 'runtime.plugins', 'index' => $index ) );
+				}
+
+				$package = self::browser_package_remote_plugin( $slug, (string) ( $plugin['url'] ?? '' ), $index, (string) ( $plugin['sha256'] ?? '' ) );
+				if ( is_wp_error( $package ) ) {
+					return $package;
+				}
+
+				$resolved[] = array_merge(
+					$plugin,
+					array(
+						'slug'          => $slug,
+						'url'           => $package['url'],
+						'sha256'        => $package['sha256'],
+						'local_package' => true,
+						'provenance'    => array(
+							'schema' => 'wp-codebox/browser-plugin-provenance/v1',
+							'source' => 'runtime-plugin-remote-package',
+							'url'    => (string) ( $plugin['url'] ?? '' ),
+						),
+					)
+				);
+				continue;
+			}
+
+			$path = 'git:directory' === $resource ? '' : self::browser_clean_path( (string) ( $plugin['path'] ?? '' ) );
 			if ( '' === $path ) {
 				$resolved[] = $plugin;
 				continue;
@@ -1545,6 +1573,94 @@ final class WP_Codebox_Abilities {
 			'path'   => $zip_path,
 			'sha256' => $sha256,
 		);
+	}
+
+	/** @return array{url:string,path:string,sha256:string}|WP_Error */
+	private static function browser_package_remote_plugin( string $slug, string $url, int $index, string $expected_sha256 = '' ): array|WP_Error {
+		$source = self::browser_plugin_url( $url, $index );
+		if ( is_wp_error( $source ) ) {
+			return $source;
+		}
+
+		$expected_sha256 = strtolower( trim( $expected_sha256 ) );
+		if ( '' !== $expected_sha256 && ! preg_match( '/^[a-f0-9]{64}$/', $expected_sha256 ) ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_sha256_invalid', 'Browser plugin sha256 must be a 64-character hex digest.', array( 'status' => 400, 'index' => $index ) );
+		}
+
+		$upload = function_exists( 'wp_upload_dir' ) ? wp_upload_dir() : array( 'basedir' => sys_get_temp_dir(), 'baseurl' => '' );
+		if ( ! is_array( $upload ) || empty( $upload['basedir'] ) ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_upload_dir_missing', 'Browser runtime plugin packaging requires an upload directory.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		$base_dir = rtrim( (string) $upload['basedir'], '/\\' ) . DIRECTORY_SEPARATOR . 'wp-codebox' . DIRECTORY_SEPARATOR . 'browser-runtime-plugins';
+		if ( ! is_dir( $base_dir ) && ! mkdir( $base_dir, 0777, true ) ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_package_dir_failed', 'Could not create browser runtime plugin package directory.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		$package_id = substr( hash( 'sha256', $slug . "\n" . $source['url'] . "\n" . $expected_sha256 ), 0, 16 );
+		$zip_path   = $base_dir . DIRECTORY_SEPARATOR . $slug . '-' . $package_id . '.zip';
+		if ( ! is_file( $zip_path ) ) {
+			$downloaded = self::browser_download_remote_plugin( $source['url'], $zip_path, $slug );
+			if ( is_wp_error( $downloaded ) ) {
+				return $downloaded;
+			}
+		}
+
+		$sha256 = hash_file( 'sha256', $zip_path );
+		if ( ! is_string( $sha256 ) ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_package_hash_failed', 'Could not hash browser runtime plugin package.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		if ( '' !== $expected_sha256 && ! hash_equals( $expected_sha256, $sha256 ) ) {
+			@unlink( $zip_path );
+			return new WP_Error( 'wp_codebox_browser_plugin_package_hash_mismatch', 'Downloaded browser runtime plugin package does not match the expected sha256.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		$base_url = is_array( $upload ) && ! empty( $upload['baseurl'] ) ? rtrim( (string) $upload['baseurl'], '/' ) : '';
+		$url      = '' !== $base_url ? $base_url . '/wp-codebox/browser-runtime-plugins/' . rawurlencode( basename( $zip_path ) ) : '';
+		if ( '' === $url ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_package_url_missing', 'Browser runtime plugin package URL is missing.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		return array(
+			'url'    => $url,
+			'path'   => $zip_path,
+			'sha256' => $sha256,
+		);
+	}
+
+	private static function browser_download_remote_plugin( string $url, string $zip_path, string $slug ): true|WP_Error {
+		$request = function_exists( 'wp_safe_remote_get' ) ? 'wp_safe_remote_get' : ( function_exists( 'wp_remote_get' ) ? 'wp_remote_get' : null );
+		if ( null === $request ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_http_missing', 'Browser runtime plugin remote packaging requires the WordPress HTTP API.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		$response = $request(
+			$url,
+			array(
+				'timeout'     => 60,
+				'redirection' => 5,
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = function_exists( 'wp_remote_retrieve_response_code' ) ? (int) wp_remote_retrieve_response_code( $response ) : (int) ( $response['response']['code'] ?? 0 );
+		if ( $code < 200 || $code >= 300 ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_download_failed', 'Could not download browser runtime plugin package.', array( 'status' => 502, 'slug' => $slug, 'http_status' => $code ) );
+		}
+
+		$body = function_exists( 'wp_remote_retrieve_body' ) ? (string) wp_remote_retrieve_body( $response ) : (string) ( $response['body'] ?? '' );
+		if ( '' === $body ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_download_empty', 'Downloaded browser runtime plugin package is empty.', array( 'status' => 502, 'slug' => $slug ) );
+		}
+
+		if ( false === file_put_contents( $zip_path, $body ) ) {
+			return new WP_Error( 'wp_codebox_browser_plugin_package_write_failed', 'Could not write browser runtime plugin package.', array( 'status' => 500, 'slug' => $slug ) );
+		}
+
+		return true;
 	}
 
 	private static function browser_component_source_fingerprint( string $source_path ): string {
