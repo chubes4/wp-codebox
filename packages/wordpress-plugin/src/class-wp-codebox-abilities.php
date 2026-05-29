@@ -1839,11 +1839,17 @@ foreach ( $files as $path => $content ) {
 	}
 
 	private static function browser_theme_activation_php( string $slug ): string {
-		return '
+		return self::browser_wordpress_bootstrap_php() . '
 if ( ! function_exists( \'switch_theme\' ) ) {
 	require_once ABSPATH . WPINC . \'/theme.php\';
 }
 switch_theme( ' . var_export( $slug, true ) . ' );';
+	}
+
+	private static function browser_wordpress_bootstrap_php(): string {
+		return 'if ( ! defined( \'ABSPATH\' ) ) {
+	require_once \'/wordpress/wp-load.php\';
+}';
 	}
 
 	/** @param array<string,mixed> $operation Bootstrap operation spec. */
@@ -1852,10 +1858,12 @@ switch_theme( ' . var_export( $slug, true ) . ' );';
 		switch ( $operation['operation'] ) {
 			case 'set_option':
 				return '<?php
+' . self::browser_wordpress_bootstrap_php() . '
 update_option( ' . var_export( (string) ( $args['name'] ?? $args['option'] ?? '' ), true ) . ', ' . var_export( $args['value'] ?? '', true ) . ' );
 ';
 			case 'activate_plugin':
 				return '<?php
+' . self::browser_wordpress_bootstrap_php() . '
 activate_plugin( ' . var_export( (string) ( $args['plugin'] ?? '' ), true ) . ' );
 ';
 			case 'activate_theme':
@@ -1864,6 +1872,7 @@ activate_plugin( ' . var_export( (string) ( $args['plugin'] ?? '' ), true ) . ' 
 ';
 			case 'flush_rewrite_rules':
 				return '<?php
+' . self::browser_wordpress_bootstrap_php() . '
 flush_rewrite_rules();
 ';
 		}
