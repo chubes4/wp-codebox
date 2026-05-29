@@ -242,6 +242,13 @@ their result artifacts are recorded as advisory/declarative evidence. Secret
 values are never written to the attestation; it records only names, counts,
 availability, and the redaction mode.
 
+Workspace policy evidence rejects symlinks, special files, nested `.git`
+metadata, hidden-policy paths, paths outside writable roots, gitlinks,
+unmerged-index entries, ignored files in git-backed mode, and regular files with
+more than one hard link. The hard-link check uses the host platform's
+`lstat().nlink` value and fails closed if the link count cannot be determined,
+because a hard-linked file under an allowed root is not independent evidence.
+
 For interactive review, pass `--preview-hold <duration>` to keep the live Playground server available briefly after artifact capture. The command emits `artifacts.preview.url` and `files/review.json` includes a matching top-level `preview` object with lifecycle and expiry details.
 
 ```bash
@@ -690,6 +697,13 @@ Current bundles include:
 Artifact bundle ids are content-addressed for the apply-back contract. The runtime writes `manifest.id` as `artifact-bundle-sha256-<digest>`, where `<digest>` is SHA-256 over the exact bytes of `files/changed-files.json` and `files/patch.diff` with the `wp-codebox/artifact-content/v1` domain separator. The same value is exposed as `manifest.contentDigest.value`, `metadata.contentDigest.value`, the CLI `artifacts.contentDigest` field, and `files/review.json` evidence. Approval and apply-back consumers must recompute it before trusting an approved artifact.
 
 Every `manifest.files[]` entry also carries `sha256: { "algorithm": "sha256", "value": "..." }`. For regular files, `value` is the SHA-256 of that artifact file's bytes. For `manifest.json`, `value` is a canonical self-hash over the parsed manifest with the manifest entry's own hash replaced by 64 zeroes, using the `wp-codebox/artifact-manifest-self/v1` domain separator. `wp-codebox artifacts verify` rejects missing hashes and mismatched hashes for any declared file, so tampering with replay-critical or supporting artifacts is detected even when the top-level content digest inputs are unchanged.
+
+`wp-codebox artifacts verify` also fails closed on unsafe bundle topology: all
+declared file paths must be bundle-relative, non-duplicated, traversal-free,
+listed in `manifest.files[]` when used as digest inputs or evidence refs, and
+present as regular files under the bundle directory. Symlinks, special files, and
+regular files with multiple hard links are rejected so downstream consumers do
+not trust artifact evidence that may alias protected content outside the bundle.
 
 ### `files/review.json`
 

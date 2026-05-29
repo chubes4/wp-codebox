@@ -60,6 +60,10 @@ assert.ok(invalidPolicy.violations.some((violation) => violation.code === "inval
 const gitRoot = await mkdtemp(join(tmpdir(), "wp-codebox-workspace-policy-git-"))
 await execFileAsync("git", ["init"], { cwd: gitRoot })
 await mkdir(join(gitRoot, "src"), { recursive: true })
+await writeFile(join(gitRoot, "src", "tracked-hardlink-source.txt"), "tracked-linked\n")
+await link(join(gitRoot, "src", "tracked-hardlink-source.txt"), join(gitRoot, "src", "tracked-hardlink-copy.txt"))
+await execFileAsync("git", ["add", "src/tracked-hardlink-source.txt", "src/tracked-hardlink-copy.txt"], { cwd: gitRoot })
+await execFileAsync("git", ["-c", "user.email=wp-codebox@example.test", "-c", "user.name=WP Codebox Smoke", "commit", "-m", "Add tracked hardlink fixture"], { cwd: gitRoot })
 await writeFile(join(gitRoot, ".gitignore"), "src/ignored.txt\n")
 await writeFile(join(gitRoot, "src", "ignored.txt"), "ignored\n")
 await execFileAsync("git", ["update-index", "--add", "--cacheinfo", "160000", "0123456789012345678901234567890123456789", "src/submodule"], { cwd: gitRoot })
@@ -81,6 +85,7 @@ const gitBacked = await checkWorkspacePolicy({
 })
 assert.equal(gitBacked.passed, false)
 assert.ok(gitBacked.violations.some((violation) => violation.code === "ignored-path" && violation.path === "src/ignored.txt"))
+assert.ok(gitBacked.violations.some((violation) => violation.code === "hardlink" && violation.path === "src/tracked-hardlink-copy.txt"))
 assert.ok(gitBacked.violations.some((violation) => violation.code === "gitlink" && violation.path === "src/submodule"))
 assert.ok(gitBacked.violations.some((violation) => violation.code === "unmerged-index" && violation.path === "src/conflict.txt"))
 

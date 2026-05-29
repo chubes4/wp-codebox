@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { cp, link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -54,6 +54,30 @@ try {
   delete (missingHashManifest.files[2] as Partial<(typeof missingHashManifest.files)[number]>).sha256
   await writeJson(join(missingFileHash, "manifest.json"), missingHashManifest)
   assertViolation(await verifyArtifactBundle(missingFileHash), "missing-file-hash")
+
+  const unlistedDigestInput = await copyBundle(validBundle, join(workspace, "unlisted-digest-input"))
+  const unlistedDigestManifest = manifestFixture(await calculateArtifactContentDigest(unlistedDigestInput, ["files/changed-files.json", "files/patch.diff"]))
+  unlistedDigestManifest.contentDigest.inputs = ["files/unlisted.txt"]
+  await writeFile(join(unlistedDigestInput, "files/unlisted.txt"), "not listed\n")
+  unlistedDigestManifest.contentDigest.value = await calculateArtifactContentDigest(unlistedDigestInput, unlistedDigestManifest.contentDigest.inputs)
+  await attachManifestFileHashes(unlistedDigestInput, unlistedDigestManifest)
+  await writeJson(join(unlistedDigestInput, "manifest.json"), unlistedDigestManifest)
+  assertViolation(await verifyArtifactBundle(unlistedDigestInput), "malformed-reference")
+
+  const duplicateManifestPath = await copyBundle(validBundle, join(workspace, "duplicate-manifest-path"))
+  const duplicateManifest = manifestFixture(await calculateArtifactContentDigest(duplicateManifestPath, ["files/changed-files.json", "files/patch.diff"]))
+  duplicateManifest.files.push(fileFixture("files/patch.diff", "patch-copy", "text/x-diff"))
+  await attachManifestFileHashes(duplicateManifestPath, duplicateManifest)
+  await writeJson(join(duplicateManifestPath, "manifest.json"), duplicateManifest)
+  assertViolation(await verifyArtifactBundle(duplicateManifestPath), "invalid-manifest-shape")
+
+  const hardlinkedFile = await copyBundle(validBundle, join(workspace, "hardlinked-file"))
+  await link(join(hardlinkedFile, "files/patch.diff"), join(hardlinkedFile, "files/patch-copy.diff"))
+  assertViolation(await verifyArtifactBundle(hardlinkedFile), "hardlink")
+
+  const orphanedSymlink = await copyBundle(validBundle, join(workspace, "orphaned-symlink"))
+  await symlink("patch.diff", join(orphanedSymlink, "files/patch-link.diff"))
+  assertViolation(await verifyArtifactBundle(orphanedSymlink), "orphaned-file")
 
   const malformedManifest = join(workspace, "malformed-manifest")
   await mkdir(malformedManifest, { recursive: true })

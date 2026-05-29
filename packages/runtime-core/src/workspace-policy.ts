@@ -78,6 +78,10 @@ export async function checkWorkspacePolicy(options: WorkspacePolicyCheckOptions)
   }
 
   const paths = new Set<string>()
+  for (const path of await listWorkspacePaths(workspaceRoot, { skipRootGitMetadata: policy.gitBacked })) {
+    paths.add(path)
+  }
+
   if (policy.gitBacked) {
     const gitEntries = await readGitStatusEntries(workspaceRoot)
     for (const entry of gitEntries) {
@@ -96,10 +100,6 @@ export async function checkWorkspacePolicy(options: WorkspacePolicyCheckOptions)
     for (const path of await readUnmergedIndexPaths(workspaceRoot)) {
       paths.add(path)
       violations.push({ code: "unmerged-index", path, message: `Unmerged index entry: ${path}` })
-    }
-  } else {
-    for (const path of await listWorkspacePaths(workspaceRoot)) {
-      paths.add(path)
     }
   }
 
@@ -159,8 +159,12 @@ async function checkWorkspacePath(policy: NormalizedWorkspacePolicy, path: strin
     return violations
   }
 
-  if (stat.isFile() && stat.nlink > 1) {
-    violations.push({ code: "hardlink", path: normalizedPath, message: `Hardlink is not allowed: ${normalizedPath}`, details: { links: stat.nlink } })
+  if (stat.isFile()) {
+    if (typeof stat.nlink !== "number" || !Number.isFinite(stat.nlink)) {
+      violations.push({ code: "hardlink", path: normalizedPath, message: `Unable to determine link count for regular file: ${normalizedPath}`, details: { linkCountAvailable: false } })
+    } else if (stat.nlink > 1) {
+      violations.push({ code: "hardlink", path: normalizedPath, message: `Hardlink is not allowed: ${normalizedPath}`, details: { links: stat.nlink } })
+    }
   }
 
   if (!stat.isFile() && !stat.isDirectory()) {
@@ -183,7 +187,7 @@ async function checkWorkspacePath(policy: NormalizedWorkspacePolicy, path: strin
   return violations
 }
 
-async function listWorkspacePaths(workspaceRoot: string): Promise<string[]> {
+async function listWorkspacePaths(workspaceRoot: string, options: { skipRootGitMetadata?: boolean } = {}): Promise<string[]> {
   const paths: string[] = []
   const queue = [""]
   while (queue.length > 0) {
@@ -192,6 +196,9 @@ async function listWorkspacePaths(workspaceRoot: string): Promise<string[]> {
     const entries = await readdir(absolute, { withFileTypes: true })
     for (const entry of entries) {
       const relativePath = normalizePolicyPath(current ? `${current}/${entry.name}` : entry.name)
+      if (options.skipRootGitMetadata && (relativePath === ".git" || relativePath.startsWith(".git/"))) {
+        continue
+      }
       paths.push(relativePath)
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         queue.push(relativePath)

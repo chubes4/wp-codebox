@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
-import { readdir, readFile, stat, writeFile } from "node:fs/promises"
-import { isAbsolute, join, normalize, sep } from "node:path"
+import { lstat, readdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { isAbsolute, join, normalize, relative, sep } from "node:path"
 
 export * from "./workspace-policy.js"
 
@@ -861,12 +861,15 @@ export type ArtifactBundleVerificationViolationCode =
   | "bundle-id-mismatch"
   | "malformed-reference"
   | "review-evidence-mismatch"
+  | "unsafe-file"
+  | "hardlink"
 
 export interface ArtifactBundleVerificationViolation {
   code: ArtifactBundleVerificationViolationCode
   path: string
   message: string
   file?: string
+  details?: Record<string, unknown>
 }
 
 export interface ArtifactBundleVerificationResult {
@@ -918,12 +921,12 @@ export async function verifyArtifactBundle(directory: string, options: VerifyArt
       continue
     }
 
+    if (manifestFiles.has(file.path)) {
+      violations.push({ code: "invalid-manifest-shape", path: fieldPath, file: file.path, message: `Manifest file path is duplicated: ${file.path}` })
+    }
     manifestFiles.add(file.path)
     try {
-      const fileStat = await stat(join(bundleDirectory, file.path))
-      if (!fileStat.isFile()) {
-        violations.push({ code: "missing-file", path: fieldPath, file: file.path, message: `Manifest path is not a file: ${file.path}` })
-      }
+      await verifyBundleFileTopology(bundleDirectory, file.path, fieldPath, violations)
     } catch {
       violations.push({ code: "missing-file", path: fieldPath, file: file.path, message: `Manifest file is missing: ${file.path}` })
     }
@@ -947,7 +950,7 @@ export async function verifyArtifactBundle(directory: string, options: VerifyArt
   }
 
   await verifyManifestFileHashes(bundleDirectory, manifest, manifestFileName, violations)
-  await verifyContentDigest(bundleDirectory, manifest, violations)
+  await verifyContentDigest(bundleDirectory, manifest, manifestFiles, violations)
   verifyBundleId(manifest, violations)
   await verifyMetadataReferences(bundleDirectory, manifestFiles, violations)
   await verifyReviewEvidence(bundleDirectory, manifest, manifestFiles, violations)
@@ -976,6 +979,31 @@ export async function calculateArtifactManifestFileSha256(directory: string, man
   }
 
   return createHash("sha256").update(await readFile(join(directory, file.path))).digest("hex")
+}
+
+async function verifyBundleFileTopology(directory: string, path: string, fieldPath: string, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+  const absolutePath = join(directory, path)
+  const fileStat = await lstat(absolutePath)
+  if (!fileStat.isFile()) {
+    violations.push({ code: "missing-file", path: fieldPath, file: path, message: `Manifest path is not a regular file: ${path}` })
+    return
+  }
+
+  if (typeof fileStat.nlink !== "number" || !Number.isFinite(fileStat.nlink)) {
+    violations.push({ code: "hardlink", path: fieldPath, file: path, message: `Unable to determine artifact file link count: ${path}`, details: { linkCountAvailable: false } })
+  } else if (fileStat.nlink > 1) {
+    violations.push({ code: "hardlink", path: fieldPath, file: path, message: `Artifact file must not be hard linked: ${path}`, details: { links: fileStat.nlink } })
+  }
+
+  try {
+    const [bundleRealpath, fileRealpath] = await Promise.all([realpath(directory), realpath(absolutePath)])
+    const realRelative = relative(bundleRealpath, fileRealpath)
+    if (realRelative === ".." || realRelative.startsWith(`..${sep}`) || isAbsolute(realRelative)) {
+      violations.push({ code: "unsafe-file", path: fieldPath, file: path, message: `Artifact file resolves outside the bundle directory: ${path}` })
+    }
+  } catch (error) {
+    violations.push({ code: "unsafe-file", path: fieldPath, file: path, message: `Unable to prove artifact file stays inside the bundle directory: ${errorMessage(error)}` })
+  }
 }
 
 export function calculateArtifactManifestSelfSha256(manifest: ArtifactManifest, manifestFileName = "manifest.json"): string {
@@ -1123,11 +1151,15 @@ function artifactPathViolation(path: string, fieldPath: string): ArtifactBundleV
   return undefined
 }
 
-async function verifyContentDigest(directory: string, manifest: ArtifactManifest, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
+async function verifyContentDigest(directory: string, manifest: ArtifactManifest, manifestFiles: Set<string>, violations: ArtifactBundleVerificationViolation[]): Promise<void> {
   for (const [index, input] of manifest.contentDigest.inputs.entries()) {
     const pathViolation = artifactPathViolation(input, `manifest.contentDigest.inputs[${index}]`)
     if (pathViolation) {
       violations.push(pathViolation)
+      return
+    }
+    if (!manifestFiles.has(input)) {
+      violations.push({ code: "malformed-reference", path: `manifest.contentDigest.inputs[${index}]`, file: input, message: `contentDigest input is not listed in manifest.json: ${input}` })
       return
     }
   }
@@ -1377,7 +1409,7 @@ async function listBundleFiles(directory: string, prefix = ""): Promise<string[]
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
     if (entry.isDirectory()) {
       files.push(...await listBundleFiles(directory, path))
-    } else if (entry.isFile()) {
+    } else {
       files.push(path)
     }
   }
