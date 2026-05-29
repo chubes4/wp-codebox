@@ -536,6 +536,12 @@ External sources are explicit and CI-safe. WP Codebox validates URL-shaped sourc
 
 WordPress.org plugin zip URLs infer the plugin slug from the zip filename. Generic HTTPS zip sources require `slug` so the sandbox mount target is deterministic. Dry-run plans and artifact provenance record the original source reference, resolved URL, source kind, and SHA-256 digest when a download occurs; temporary download paths are reported by category rather than as durable host paths.
 
+`inputs.siteSeeds` supports bounded sandbox setup data before workflow steps run. Local `fixture` seeds import JSON objects with scoped `posts`, `terms`, `options`, anonymized `users`, media metadata, `activePlugins`, and `activeTheme`. Every record scope must be explicit through selectors and/or `maxRecords`; option scopes require a `names` allow-list; parent-site users are anonymized; media file bytes are not replayed.
+
+The WordPress host ability also accepts `site_seeds` entries with `type: "parent_site"`. That path is opt-in: the host exports only the requested current-site scopes into a temporary JSON fixture, invokes `recipe-run`, then deletes the fixture. This is a bounded seed substrate, not a full migration engine. It does not replay full database state, comments, revisions, arbitrary meta, uploads, secrets, or source-site filesystem state.
+
+Reprint remains a future backend candidate for full/essential parent-site snapshots. WP Codebox does not vendor or shell out to Reprint for bounded `siteSeeds` yet because Reprint is a site-scale migration engine, while this contract needs explicit per-scope limits and privacy defaults.
+
 Mount entries may include opaque `metadata` that is preserved in runtime observations, artifact provenance, and captured mount files. Product-specific callers can use this to map sandbox paths back to source repositories without WP Codebox knowing about the caller's deployment environment:
 
 ```json

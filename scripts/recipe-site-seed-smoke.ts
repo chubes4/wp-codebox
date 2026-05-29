@@ -45,6 +45,21 @@ writeFileSync(fixtureSeedPath, `${JSON.stringify({
       name: "Site Seed Smoke Category",
     },
   ],
+  users: [
+    {
+      user_login: "site-seed-smoke-user",
+      user_email: "site-seed-smoke-user@example.invalid",
+      display_name: "Site Seed Smoke User",
+      roles: ["editor"],
+    },
+  ],
+  media: [
+    {
+      post_name: "site-seed-smoke-media",
+      post_title: "Site Seed Smoke Media",
+      post_mime_type: "image/png",
+    },
+  ],
 }, null, 2)}\n`)
 writeFileSync(customSeedPath, "site-seed-smoke-registry-page\n")
 writeFileSync(importerPluginPath, `<?php
@@ -119,6 +134,8 @@ writeFileSync(recipePath, `${JSON.stringify({
           posts: { postTypes: ["page"], slugs: ["site-seed-smoke-page"], maxRecords: 1 },
           options: { names: ["blogname"], maxRecords: 1 },
           terms: { taxonomies: ["category"], slugs: ["site-seed-smoke-category"], maxRecords: 1 },
+          users: { names: ["site-seed-smoke-user"], anonymize: true, maxRecords: 1 },
+          media: { slugs: ["site-seed-smoke-media"], maxRecords: 1 },
           activePlugins: true,
           activeTheme: true,
         },
@@ -147,7 +164,7 @@ writeFileSync(recipePath, `${JSON.stringify({
       {
         command: "wordpress.run-php",
         args: [
-          "code=$page = get_page_by_path('site-seed-smoke-page', OBJECT, 'page'); if (!$page) { throw new RuntimeException('seeded page missing'); } $registry_page = get_page_by_path('site-seed-smoke-registry-page', OBJECT, 'page'); if (!$registry_page) { throw new RuntimeException('registry seeded page missing'); } if (get_page_by_path('site-seed-smoke-excluded-page', OBJECT, 'page')) { throw new RuntimeException('unscoped page imported'); } if (get_option('blogname') !== 'WP Codebox Seeded Sandbox') { throw new RuntimeException('seeded option missing'); } if (!term_exists('site-seed-smoke-category', 'category')) { throw new RuntimeException('seeded term missing'); } if (!is_plugin_active('simple-plugin/simple-plugin.php')) { throw new RuntimeException('seeded plugin not active'); } if (!is_plugin_active('test-seed-importer/test-seed-importer.php')) { throw new RuntimeException('importer plugin not active'); } if (get_stylesheet() !== 'twentytwentyfive') { throw new RuntimeException('seeded theme not active: ' . get_stylesheet()); } echo wp_json_encode(array('page' => $page->post_name, 'registryPage' => $registry_page->post_name, 'blogname' => get_option('blogname'), 'pluginActive' => is_plugin_active('simple-plugin/simple-plugin.php'), 'stylesheet' => get_stylesheet()));",
+          "code=$page = get_page_by_path('site-seed-smoke-page', OBJECT, 'page'); if (!$page) { throw new RuntimeException('seeded page missing'); } $registry_page = get_page_by_path('site-seed-smoke-registry-page', OBJECT, 'page'); if (!$registry_page) { throw new RuntimeException('registry seeded page missing'); } if (get_page_by_path('site-seed-smoke-excluded-page', OBJECT, 'page')) { throw new RuntimeException('unscoped page imported'); } if (get_option('blogname') !== 'WP Codebox Seeded Sandbox') { throw new RuntimeException('seeded option missing'); } if (!term_exists('site-seed-smoke-category', 'category')) { throw new RuntimeException('seeded term missing'); } if (!username_exists('site-seed-smoke-user')) { throw new RuntimeException('seeded user missing'); } $media = get_page_by_path('site-seed-smoke-media', OBJECT, 'attachment'); if (!$media) { throw new RuntimeException('seeded media missing'); } if (!is_plugin_active('simple-plugin/simple-plugin.php')) { throw new RuntimeException('seeded plugin not active'); } if (!is_plugin_active('test-seed-importer/test-seed-importer.php')) { throw new RuntimeException('importer plugin not active'); } if (get_stylesheet() !== 'twentytwentyfive') { throw new RuntimeException('seeded theme not active: ' . get_stylesheet()); } echo wp_json_encode(array('page' => $page->post_name, 'registryPage' => $registry_page->post_name, 'blogname' => get_option('blogname'), 'user' => username_exists('site-seed-smoke-user'), 'media' => $media->post_name, 'pluginActive' => is_plugin_active('simple-plugin/simple-plugin.php'), 'stylesheet' => get_stylesheet()));",
         ],
       },
     ],
@@ -204,6 +221,8 @@ assert.equal(output.siteSeeds[0].privacy.importsIntoSandbox, true)
 assert.equal(output.siteSeeds[0].counts.posts, 1)
 assert.equal(output.siteSeeds[0].counts.options, 1)
 assert.equal(output.siteSeeds[0].counts.terms, 1)
+assert.equal(output.siteSeeds[0].counts.users, 1)
+assert.equal(output.siteSeeds[0].counts.media, 1)
 assert.equal(output.siteSeeds[0].counts.activePlugins, 1)
 assert.equal(output.siteSeeds[0].counts.activeTheme, 1)
 assert.equal(output.siteSeeds[0].counts.fixturePostsExcluded, 1)
@@ -227,6 +246,8 @@ const workflowResult = JSON.parse(output.executions[3].stdout)
 assert.equal(workflowResult.page, "site-seed-smoke-page")
 assert.equal(workflowResult.registryPage, "site-seed-smoke-registry-page")
 assert.equal(workflowResult.blogname, "WP Codebox Seeded Sandbox")
+assert.equal(typeof workflowResult.user, "number")
+assert.equal(workflowResult.media, "site-seed-smoke-media")
 assert.equal(workflowResult.pluginActive, true)
 assert.equal(workflowResult.stylesheet, "twentytwentyfive")
 

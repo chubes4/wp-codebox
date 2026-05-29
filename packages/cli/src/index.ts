@@ -3966,7 +3966,7 @@ if (!is_array($seed)) {
     throw new RuntimeException('Site seed fixture must decode to a JSON object.');
 }
 
-$counts = array('posts' => 0, 'options' => 0, 'terms' => 0, 'activePlugins' => 0, 'activeTheme' => 0);
+$counts = array('posts' => 0, 'options' => 0, 'terms' => 0, 'users' => 0, 'media' => 0, 'activePlugins' => 0, 'activeTheme' => 0);
 
 foreach (($seed['posts'] ?? array()) as $post) {
     if (!is_array($post)) {
@@ -4018,6 +4018,59 @@ foreach (($seed['terms'] ?? array()) as $term) {
         throw new RuntimeException('Failed to import site seed term from ' . $seed_name . ': ' . $result->get_error_message());
     }
     $counts['terms']++;
+}
+
+foreach (($seed['users'] ?? array()) as $user) {
+    if (!is_array($user)) {
+        continue;
+    }
+    $login = isset($user['user_login']) ? (string) $user['user_login'] : (isset($user['login']) ? (string) $user['login'] : '');
+    if ('' === $login || !preg_match('/^[A-Za-z0-9_.@-]+$/', $login)) {
+        throw new RuntimeException('Unsafe site seed user login from ' . $seed_name . '.');
+    }
+    if (username_exists($login)) {
+        $counts['users']++;
+        continue;
+    }
+    $email = isset($user['user_email']) ? (string) $user['user_email'] : (isset($user['email']) ? (string) $user['email'] : $login . '@example.invalid');
+    if (!is_email($email)) {
+        $email = $login . '@example.invalid';
+    }
+    $user_id = wp_insert_user(array(
+        'user_login' => $login,
+        'user_pass' => wp_generate_password(24, true, true),
+        'user_email' => $email,
+        'display_name' => isset($user['display_name']) ? (string) $user['display_name'] : $login,
+        'role' => isset($user['role']) ? (string) $user['role'] : (is_array($user['roles'] ?? null) && count($user['roles']) > 0 ? (string) reset($user['roles']) : 'subscriber'),
+    ));
+    if (is_wp_error($user_id)) {
+        throw new RuntimeException('Failed to import site seed user from ' . $seed_name . ': ' . $user_id->get_error_message());
+    }
+    $counts['users']++;
+}
+
+foreach (($seed['media'] ?? array()) as $media) {
+    if (!is_array($media)) {
+        continue;
+    }
+    $attachment = array(
+        'post_type' => 'attachment',
+        'post_status' => isset($media['post_status']) ? (string) $media['post_status'] : 'inherit',
+        'post_title' => isset($media['post_title']) ? (string) $media['post_title'] : (isset($media['title']) ? (string) $media['title'] : 'Seeded media'),
+        'post_content' => isset($media['post_content']) ? (string) $media['post_content'] : '',
+        'post_excerpt' => isset($media['post_excerpt']) ? (string) $media['post_excerpt'] : '',
+        'post_mime_type' => isset($media['post_mime_type']) ? (string) $media['post_mime_type'] : (isset($media['mime_type']) ? (string) $media['mime_type'] : ''),
+    );
+    if (isset($media['slug'])) {
+        $attachment['post_name'] = (string) $media['slug'];
+    } elseif (isset($media['post_name'])) {
+        $attachment['post_name'] = (string) $media['post_name'];
+    }
+    $attachment_id = wp_insert_post($attachment, true);
+    if (is_wp_error($attachment_id)) {
+        throw new RuntimeException('Failed to import site seed media from ' . $seed_name . ': ' . $attachment_id->get_error_message());
+    }
+    $counts['media']++;
 }
 
 $active_plugins = $seed['activePlugins'] ?? array();
@@ -4142,11 +4195,13 @@ function boundedFixtureSeed(rawSeed: unknown, scopes: WorkspaceRecipeSiteSeed["s
   const posts = boundedRecords(arrayRecords(seed.posts), scopes.posts, (record, scope) => matchesPostScope(record, scope))
   const options = boundedOptions(seed.options, scopes.options)
   const terms = boundedRecords(arrayRecords(seed.terms), scopes.terms, (record, scope) => matchesTermScope(record, scope))
+  const users = boundedRecords(arrayRecords(seed.users), scopes.users, (record, scope) => matchesUserScope(record, scope))
+  const media = boundedRecords(arrayRecords(seed.media), scopes.media, (record, scope) => matchesMediaScope(record, scope))
   const activePlugins = boundedActivePlugins(seed.activePlugins, scopes.activePlugins)
   const activeTheme = boundedActiveTheme(seed.activeTheme, scopes.activeTheme)
 
   return {
-    seed: stripUndefined({ posts: posts.records, options: options.records, terms: terms.records, activePlugins: activePlugins.records, activeTheme: activeTheme.record }),
+    seed: stripUndefined({ posts: posts.records, options: options.records, terms: terms.records, users: users.records, media: media.records, activePlugins: activePlugins.records, activeTheme: activeTheme.record }),
     counts: {
       fixturePostsIncluded: posts.records.length,
       fixturePostsExcluded: posts.excluded,
@@ -4154,6 +4209,10 @@ function boundedFixtureSeed(rawSeed: unknown, scopes: WorkspaceRecipeSiteSeed["s
       fixtureOptionsExcluded: options.excluded,
       fixtureTermsIncluded: terms.records.length,
       fixtureTermsExcluded: terms.excluded,
+      fixtureUsersIncluded: users.records.length,
+      fixtureUsersExcluded: users.excluded,
+      fixtureMediaIncluded: media.records.length,
+      fixtureMediaExcluded: media.excluded,
       fixtureActivePluginsIncluded: activePlugins.records.length,
       fixtureActivePluginsExcluded: activePlugins.excluded,
       fixtureActiveThemeIncluded: activeTheme.record === undefined ? 0 : 1,
@@ -4239,11 +4298,32 @@ function matchesTermScope(record: Record<string, unknown>, scope: NonNullable<Wo
     matchesStringSelector(record, scope.taxonomies, ["taxonomy"])
 }
 
+function matchesUserScope(record: Record<string, unknown>, scope: NonNullable<WorkspaceRecipeSiteSeed["scopes"]["users"]>): boolean {
+  return matchesNumberSelector(record, scope.ids, ["id", "ID"]) &&
+    matchesStringSelector(record, scope.names, ["user_login", "login", "display_name", "name"]) &&
+    matchesArrayStringSelector(record, scope.roles, ["roles"])
+}
+
+function matchesMediaScope(record: Record<string, unknown>, scope: NonNullable<WorkspaceRecipeSiteSeed["scopes"]["media"]>): boolean {
+  return matchesNumberSelector(record, scope.ids, ["id", "ID"]) &&
+    matchesStringSelector(record, scope.slugs, ["slug", "post_name"]) &&
+    matchesStringSelector(record, scope.names, ["post_title", "title", "name"]) &&
+    matchesStringSelector(record, scope.statuses, ["post_status", "status"])
+}
+
 function matchesStringSelector(record: Record<string, unknown>, allowed: string[] | undefined, keys: string[]): boolean {
   if (!allowed || allowed.length === 0) {
     return true
   }
   const values = keys.map((key) => record[key]).filter((value): value is string => typeof value === "string")
+  return values.some((value) => allowed.includes(value))
+}
+
+function matchesArrayStringSelector(record: Record<string, unknown>, allowed: string[] | undefined, keys: string[]): boolean {
+  if (!allowed || allowed.length === 0) {
+    return true
+  }
+  const values = keys.flatMap((key) => Array.isArray(record[key]) ? record[key] : []).filter((value): value is string => typeof value === "string")
   return values.some((value) => allowed.includes(value))
 }
 

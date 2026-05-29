@@ -60,6 +60,7 @@ final class WP_Codebox_Abilities {
 		$register_callback = function (): void {
 			$task_input_schema  = self::task_input_schema();
 			$mount_schema      = self::mount_schema();
+			$site_seed_schema  = self::site_seed_schema();
 			$inherit_schema    = self::inherit_schema();
 			$session_schema    = self::sandbox_session_schema();
 			$browser_session_schema = self::browser_playground_session_schema();
@@ -122,6 +123,7 @@ final class WP_Codebox_Abilities {
 								'items'       => array( 'type' => 'string' ),
 							),
 							'mounts'                 => $mount_schema,
+							'site_seeds'             => $site_seed_schema,
 							'inherit'                => $inherit_schema,
 							'sandbox_session_id'     => $session_input['sandbox_session_id'],
 							'orchestrator'           => $session_input['orchestrator'],
@@ -513,6 +515,50 @@ final class WP_Codebox_Abilities {
 					'metadata' => array(
 						'type'        => 'object',
 						'description' => 'Opaque caller metadata, for example repo, default_branch, repo_root_relative_to_mount, and editable flags.',
+					),
+				),
+			),
+		);
+	}
+
+	/** @return array<string,mixed> */
+	private static function site_seed_schema(): array {
+		$scope_schema = array(
+			'type'       => 'object',
+			'properties' => array(
+				'ids'          => array( 'type' => 'array', 'items' => array( 'type' => 'integer' ) ),
+				'slugs'        => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'names'        => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'postTypes'    => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'taxonomies'   => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'roles'        => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'statuses'     => array( 'type' => 'array', 'items' => array( 'type' => 'string' ) ),
+				'includeFiles' => array( 'type' => 'boolean' ),
+				'anonymize'    => array( 'type' => 'boolean' ),
+				'maxRecords'   => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 100 ),
+			),
+		);
+
+		return array(
+			'type'        => 'array',
+			'description' => 'Explicit opt-in bounded parent-site seed exports for existing-site sandboxes. Exported data is written to a temporary JSON fixture and imported into the sandbox before the task runs.',
+			'items'       => array(
+				'type'       => 'object',
+				'required'   => array( 'type', 'name', 'scopes' ),
+				'properties' => array(
+					'type'   => array( 'type' => 'string', 'enum' => array( 'parent_site' ) ),
+					'name'   => array( 'type' => 'string' ),
+					'scopes' => array(
+						'type'       => 'object',
+						'properties' => array(
+							'posts'         => $scope_schema,
+							'terms'         => $scope_schema,
+							'options'       => $scope_schema,
+							'users'         => $scope_schema,
+							'media'         => $scope_schema,
+							'activePlugins' => array( 'type' => 'boolean' ),
+							'activeTheme'   => array( 'type' => 'boolean' ),
+						),
 					),
 				),
 			),
