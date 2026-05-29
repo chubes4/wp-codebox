@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import {
   buildRuntimeReferenceManifest,
+  buildRuntimeReplayReferenceIndex,
   calculateArtifactManifestFileSha256,
   type ArtifactBundle,
   type ArtifactManifest,
@@ -87,6 +88,7 @@ export class ArtifactBundleBuilder {
     const testResultsPath = join(filesDirectory, "test-results.json")
     const reviewPath = join(filesDirectory, "review.json")
     const runtimeReferenceManifestPath = join(filesDirectory, "runtime-reference-manifest.json")
+    const runtimeReplayReferenceIndexPath = join(filesDirectory, "runtime-replay-index.json")
     const redactor = new ArtifactRedactor(source.spec.secretEnv)
 
     await source.redactBrowserArtifacts(redactor)
@@ -143,6 +145,7 @@ export class ArtifactBundleBuilder {
       testResults: relative(source.artifactRoot, testResultsPath),
       review: relative(source.artifactRoot, reviewPath),
       runtimeReferenceManifest: relative(source.artifactRoot, runtimeReferenceManifestPath),
+      runtimeReplayReferenceIndex: relative(source.artifactRoot, runtimeReplayReferenceIndexPath),
       mountDiffs: relative(source.artifactRoot, diffsPath),
       ...(browser ? { browser: "files/browser/summary.json" } : {}),
       ...(source.pluginCheckArtifactPaths().length > 0 ? { pluginChecks: source.pluginCheckArtifactPaths() } : {}),
@@ -179,6 +182,7 @@ export class ArtifactBundleBuilder {
       fileEntry(testResultsPath, "test-results", "application/json"),
       fileEntry(reviewPath, "review", "application/json"),
       fileEntry(runtimeReferenceManifestPath, "runtime-reference-manifest", "application/json"),
+      fileEntry(runtimeReplayReferenceIndexPath, "runtime-replay-index", "application/json"),
       ...source.browserManifestFiles(),
       ...source.observationManifestFiles(),
       ...source.pluginCheckManifestFiles(),
@@ -211,6 +215,7 @@ export class ArtifactBundleBuilder {
     }
     await writeRedactedArtifact(redactor, reviewPath, source.artifactRoot, `${JSON.stringify(review, null, 2)}\n`)
     await writeFile(runtimeReferenceManifestPath, "{}\n")
+    await writeFile(runtimeReplayReferenceIndexPath, "{}\n")
     metadata.redaction = redactor.summary()
     await writeRedactedArtifact(redactor, metadataPath, source.artifactRoot, `${JSON.stringify(metadata, null, 2)}\n`)
 
@@ -251,11 +256,41 @@ export class ArtifactBundleBuilder {
         digest: { algorithm: "sha256", value: contentDigest },
       },
       files: manifest.files
-        .filter((file) => !["manifest.json", "metadata.json", "files/review.json", "files/runtime-reference-manifest.json"].includes(file.path))
+        .filter((file) => !["manifest.json", "metadata.json", "files/review.json", "files/runtime-reference-manifest.json", "files/runtime-replay-index.json"].includes(file.path))
         .map((file) => ({ path: file.path, kind: file.kind, contentType: file.contentType, sha256: file.sha256 })),
     })
     await writeFile(runtimeReferenceManifestPath, `${JSON.stringify(runtimeReferenceManifest, null, 2)}\n`)
+    const runtimeReferenceManifestRef = {
+      path: "files/runtime-reference-manifest.json",
+      kind: "runtime-reference-manifest",
+      contentType: "application/json",
+      sha256: {
+        algorithm: "sha256" as const,
+        value: await calculateArtifactManifestFileSha256(source.artifactRoot, manifest, { path: "files/runtime-reference-manifest.json", kind: "runtime-reference-manifest", contentType: "application/json", sha256: { algorithm: "sha256", value: "0".repeat(64) } }),
+      },
+    }
+    const runtimeReplayReferenceIndex = buildRuntimeReplayReferenceIndex({
+      createdAt,
+      runtime,
+      artifactBundle: {
+        kind: "artifact-bundle",
+        id: bundleId,
+        digest: { algorithm: "sha256", value: contentDigest },
+      },
+      files: manifest.files
+        .filter((file) => !["manifest.json", "files/runtime-replay-index.json"].includes(file.path))
+        .map((file) => file.path === "files/runtime-reference-manifest.json" ? runtimeReferenceManifestRef : ({ path: file.path, kind: file.kind, contentType: file.contentType, sha256: file.sha256 })),
+      runtimeReferenceManifest: runtimeReferenceManifestRef,
+    })
+    await writeFile(runtimeReplayReferenceIndexPath, `${JSON.stringify(runtimeReplayReferenceIndex, null, 2)}\n`)
     manifest.files = await Promise.all(manifest.files.map(async (file) => file.path === "files/runtime-reference-manifest.json" ? ({
+      ...file,
+      sha256: {
+        algorithm: "sha256" as const,
+        value: await calculateArtifactManifestFileSha256(source.artifactRoot, manifest, file),
+      },
+    }) : file))
+    manifest.files = await Promise.all(manifest.files.map(async (file) => file.path === "files/runtime-replay-index.json" ? ({
       ...file,
       sha256: {
         algorithm: "sha256" as const,
@@ -291,6 +326,7 @@ export class ArtifactBundleBuilder {
       testResultsPath,
       reviewPath,
       runtimeReferenceManifestPath,
+      runtimeReplayReferenceIndexPath,
       ...(preview ? { preview } : {}),
       contentDigest,
       createdAt,
