@@ -283,6 +283,7 @@ export function buildArtifactReview({
       changedFiles: "files/changed-files.json",
       testResults: "files/test-results.json",
       runtimeReferenceManifest: "files/runtime-reference-manifest.json",
+      runtimeReplayReferenceIndex: "files/runtime-replay-index.json",
     },
     ...(browser ? { browser } : {}),
     riskFlags: [],
