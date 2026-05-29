@@ -11,6 +11,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', sys_get_temp_dir() . '/wp-codebox-wordpress-plugin/' );
 }
 
+$plugin_bundle_root = sys_get_temp_dir() . '/wp-codebox-wordpress-plugin-bundle-' . getmypid();
+if ( ! defined( 'WP_CODEBOX_PLUGIN_PATH' ) ) {
+	define( 'WP_CODEBOX_PLUGIN_PATH', $plugin_bundle_root . '/wp-codebox/' );
+}
+
 if ( ! class_exists( 'WP_Ability' ) ) {
 	class WP_Ability {}
 }
@@ -133,6 +138,12 @@ foreach ( array( 'agents-api', 'data-machine', 'data-machine-code', 'plugin-root
 	mkdir( $root . '/' . $dir, 0777, true );
 }
 file_put_contents( $root . '/wp-codebox.js', "#!/usr/bin/env node\n" );
+mkdir( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/bin', 0777, true );
+mkdir( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/vendor/node/bin', 0777, true );
+file_put_contents( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/bin/wp-codebox', "#!/usr/bin/env bash\n" );
+file_put_contents( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/vendor/node/bin/node', "#!/usr/bin/env bash\n" );
+chmod( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/bin/wp-codebox', 0755 );
+chmod( WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/vendor/node/bin/node', 0755 );
 if ( ! defined( 'WP_PLUGIN_DIR' ) ) {
 	define( 'WP_PLUGIN_DIR', $root . '/plugin-root' );
 }
@@ -417,7 +428,7 @@ $assert( 'runner returns public preview URL in session artifact metadata', ! is_
 $assert( 'runner surfaces normalized agent result summary', ! is_wp_error( $result ) && 'wp-codebox/agent-result/v1' === ( $result['agent_result']['schema'] ?? '' ) && false === ( $result['agent_result']['actionable'] ?? true ) && 'no_file_changes' === ( $result['agent_result']['noOpReason'] ?? '' ) && 'files/transcript.json' === ( $result['agent_result']['transcript']['artifact'] ?? '' ) );
 $assert( 'runner returns normalized task input for legacy task', ! is_wp_error( $result ) && 'wp-codebox/task-input/v1' === ( $result['task_input']['schema'] ?? '' ) && 'Run a chat-requested sandbox task.' === ( $result['task_input']['goal'] ?? '' ) );
 $assert( 'runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
-$assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node ' ) );
+$assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node' ) && str_contains( $captured_command, 'wp-codebox.js' ) );
 $assert( 'runner passes preview hold to CLI', str_contains( $captured_command, '--preview-hold' ) && str_contains( $captured_command, "'30'" ) );
 $assert( 'runner passes preview configuration to CLI', str_contains( $captured_command, '--preview-port' ) && str_contains( $captured_command, "'45678'" ) && str_contains( $captured_command, '--preview-bind' ) && str_contains( $captured_command, "'127.0.0.1'" ) && str_contains( $captured_command, '--preview-public-url' ) && str_contains( $captured_command, "'https://preview.example.test/session-123/'" ) );
 $assert( 'runner recipe uses agent step', str_contains( $captured_recipe, 'wp-codebox.agent-sandbox-run' ) );
@@ -474,6 +485,18 @@ $plugin_native_plugins = array_map(
 );
 $assert( 'runner defaults Agents API path from WP_PLUGIN_DIR', ! is_wp_error( $plugin_native_result ) && in_array( 'agents-api', $plugin_native_plugins, true ) );
 $assert( 'runner does not require Data Machine component paths', ! is_wp_error( $plugin_native_result ) && ! in_array( 'data-machine', $plugin_native_plugins, true ) && ! in_array( 'data-machine-code', $plugin_native_plugins, true ) );
+
+unset( $GLOBALS['wp_codebox_filters']['wp_codebox_bin'] );
+$bundled_runtime_result = $runner->run(
+	array(
+		'goal'           => 'Run with the packaged WP Codebox CLI runtime.',
+		'artifacts_path' => $root . '/artifacts',
+	)
+);
+$assert( 'runner defaults to packaged CLI wrapper when present', ! is_wp_error( $bundled_runtime_result ) && str_contains( $captured_command, WP_CODEBOX_PLUGIN_PATH . 'vendor/wp-codebox-cli/bin/wp-codebox' ) );
+$assert( 'runner preflights packaged Node runtime', ! is_wp_error( $bundled_runtime_result ) && ! str_contains( $captured_command, 'node: not found' ) );
+
+$GLOBALS['wp_codebox_filters']['wp_codebox_bin'] = $root . '/wp-codebox.js';
 
 $GLOBALS['wp_codebox_filters']['wp_codebox_component_paths'] = array(
 	'agents_api'        => $root . '/agents-api',
