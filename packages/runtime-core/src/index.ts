@@ -168,6 +168,7 @@ export const commandRegistry = [
       { name: "url", description: "Preview path or absolute URL to visit.", required: true, format: "path or URL" },
       { name: "wait-for", description: "Navigation wait condition.", format: "domcontentloaded|load|networkidle|selector:<selector>|duration" },
       { name: "duration", description: "Extra capture duration, or wait time when wait-for=duration.", format: "duration, e.g. 2s or 500ms" },
+      { name: "script", description: "Optional page-side JavaScript to evaluate after navigation and before final capture.", format: "JavaScript function body" },
       { name: "capture", description: "Comma-separated artifacts to capture.", format: "console,errors,html,network,screenshot" },
     ],
     outputShape: "JSON summary plus files/browser/console.jsonl, errors.jsonl, network.jsonl, snapshot.html, summary.json, and screenshot.png when captured.",

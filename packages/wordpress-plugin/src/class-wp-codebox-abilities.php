@@ -1820,15 +1820,15 @@ final class WP_Codebox_Abilities {
 		}
 
 		$scheme     = strtolower( (string) $parts['scheme'] );
-		$allow_http = (bool) apply_filters( 'wp_codebox_browser_plugin_allow_http', false, $url, $index );
+		$host       = strtolower( (string) $parts['host'] );
+		$allow_http = self::is_loopback_host( $host ) || (bool) apply_filters( 'wp_codebox_browser_plugin_allow_http', false, $url, $index );
 		if ( 'https' !== $scheme && ! ( $allow_http && 'http' === $scheme ) ) {
 			return new WP_Error( 'wp_codebox_browser_plugin_url_insecure', 'Browser plugin URL must use https://.', array( 'status' => 400, 'index' => $index ) );
 		}
 
 		$origin        = self::url_origin( $parts );
-		$default_hosts = array( 'downloads.wordpress.org' );
+		$default_hosts = self::is_loopback_host( $host ) ? array( 'downloads.wordpress.org', $host ) : array( 'downloads.wordpress.org' );
 		$allowed_hosts = array_map( 'strtolower', self::string_list( apply_filters( 'wp_codebox_browser_plugin_allowed_hosts', $default_hosts, $url, $index ) ) );
-		$host          = strtolower( (string) $parts['host'] );
 		if ( ! in_array( $host, $allowed_hosts, true ) ) {
 			return new WP_Error( 'wp_codebox_browser_plugin_host_not_allowed', 'Browser plugin URL host is not allowed.', array( 'status' => 400, 'index' => $index, 'host' => $host ) );
 		}
@@ -1843,15 +1843,16 @@ final class WP_Codebox_Abilities {
 			return new WP_Error( 'wp_codebox_browser_theme_url_invalid', 'Browser theme URL must be absolute.', array( 'status' => 400, 'index' => $index ) );
 		}
 
-		$scheme = strtolower( (string) $parts['scheme'] );
-		if ( 'https' !== $scheme ) {
+		$scheme     = strtolower( (string) $parts['scheme'] );
+		$host       = strtolower( (string) $parts['host'] );
+		$allow_http = self::is_loopback_host( $host );
+		if ( 'https' !== $scheme && ! ( $allow_http && 'http' === $scheme ) ) {
 			return new WP_Error( 'wp_codebox_browser_theme_url_insecure', 'Browser theme URL must use https://.', array( 'status' => 400, 'index' => $index ) );
 		}
 
 		$origin        = self::url_origin( $parts );
-		$default_hosts = array( 'downloads.wordpress.org' );
+		$default_hosts = self::is_loopback_host( $host ) ? array( 'downloads.wordpress.org', $host ) : array( 'downloads.wordpress.org' );
 		$allowed_hosts = array_map( 'strtolower', self::string_list( apply_filters( 'wp_codebox_browser_theme_allowed_hosts', $default_hosts, $url, $index ) ) );
-		$host          = strtolower( (string) $parts['host'] );
 		if ( ! in_array( $host, $allowed_hosts, true ) ) {
 			return new WP_Error( 'wp_codebox_browser_theme_host_not_allowed', 'Browser theme URL host is not allowed.', array( 'status' => 400, 'index' => $index, 'host' => $host ) );
 		}
@@ -1865,6 +1866,11 @@ final class WP_Codebox_Abilities {
 		$host   = strtolower( (string) ( $parts['host'] ?? '' ) );
 		$port   = isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '';
 		return $scheme . '://' . $host . $port;
+	}
+
+	private static function is_loopback_host( string $host ): bool {
+		$host = strtolower( trim( $host, '[]' ) );
+		return 'localhost' === $host || '127.0.0.1' === $host || '::1' === $host;
 	}
 
 	/** @return string[] */

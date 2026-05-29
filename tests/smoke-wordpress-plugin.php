@@ -566,6 +566,20 @@ $browser_insecure_plugin_url = call_user_func(
 );
 $assert( 'browser Playground session rejects insecure browser plugin URLs', is_wp_error( $browser_insecure_plugin_url ) && 'wp_codebox_browser_plugin_url_insecure' === $browser_insecure_plugin_url->get_error_code() );
 
+$browser_plugin_allowed_hosts_filter = $GLOBALS['wp_codebox_filters']['wp_codebox_browser_plugin_allowed_hosts'] ?? null;
+unset( $GLOBALS['wp_codebox_filters']['wp_codebox_browser_plugin_allowed_hosts'] );
+$browser_loopback_plugin_url = call_user_func(
+	$browser_session_ability['execute_callback'],
+	array(
+		'goal'            => 'Prepare a browser preview with a loopback plugin URL.',
+		'browser_plugins' => array( array( 'url' => 'http://127.0.0.1:8888/plugin.zip' ) ),
+	)
+);
+if ( null !== $browser_plugin_allowed_hosts_filter ) {
+	$GLOBALS['wp_codebox_filters']['wp_codebox_browser_plugin_allowed_hosts'] = $browser_plugin_allowed_hosts_filter;
+}
+$assert( 'browser Playground session accepts loopback browser plugin URLs', ! is_wp_error( $browser_loopback_plugin_url ) );
+
 $browser_untrusted_plugin_host = call_user_func(
 	$browser_session_ability['execute_callback'],
 	array(

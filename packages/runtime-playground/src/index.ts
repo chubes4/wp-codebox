@@ -541,6 +541,7 @@ interface BrowserProbeArtifact {
     networkEvents: number
     replayability: BrowserProbeReplayability
     screenshot: boolean
+    scriptResult?: unknown
     viewport: BrowserProbeViewport | null
   }
 }
@@ -1211,6 +1212,7 @@ class PlaygroundRuntime implements Runtime {
 
     const waitFor = argValue(args, "wait-for")?.trim() || "domcontentloaded"
     const durationMs = durationArg(args, "duration", 0)
+    const script = argValue(args, "script")
     const targetUrl = resolveBrowserProbeUrl(urlArg, server.serverUrl)
     const browserDirectory = join(this.artifactRoot, "files", "browser")
     await mkdir(browserDirectory, { recursive: true })
@@ -1231,6 +1233,7 @@ class PlaygroundRuntime implements Runtime {
     let htmlSha256: string | undefined
     let screenshotSha256: string | undefined
     let viewport: BrowserProbeViewport | null = null
+    let scriptResult: unknown
 
     try {
       const page = await browser.newPage()
@@ -1247,6 +1250,12 @@ class PlaygroundRuntime implements Runtime {
       }
 
       await navigateBrowserProbe(page, targetUrl, waitFor, durationMs)
+      if (script) {
+        scriptResult = await page.evaluate(async (source) => {
+          const run = new Function(`return (async () => {\n${source}\n})()`)
+          return run()
+        }, script)
+      }
       if (durationMs > 0 && waitFor !== "duration") {
         await page.waitForTimeout(durationMs)
       }
@@ -1296,6 +1305,7 @@ class PlaygroundRuntime implements Runtime {
           networkEvents: network.length,
           replayability: browserProbeReplayability(capture),
           screenshot: capture.has("screenshot"),
+          ...(typeof scriptResult !== "undefined" ? { scriptResult } : {}),
           viewport,
         },
       }

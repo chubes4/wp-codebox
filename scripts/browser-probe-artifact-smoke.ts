@@ -37,7 +37,13 @@ await writeFile(recipePath, `${JSON.stringify({
     steps: [
       {
         command: "wordpress.browser-probe",
-        args: ["url=/", "wait-for=load", "duration=1s", "capture=console,errors,html,network,screenshot"],
+        args: [
+          "url=/",
+          "wait-for=load",
+          "duration=1s",
+          "capture=console,errors,html,network,screenshot",
+          "script=console.info('wp-codebox fixture browser script'); return { title: document.title, hasBody: !!document.body };",
+        ],
       },
     ],
   },
@@ -79,6 +85,7 @@ const errorLog = await readFile(errorsPath, "utf8")
 const htmlSnapshot = await readFile(htmlPath, "utf8")
 const networkLog = await readFile(networkPath, "utf8")
 assert.match(consoleLog, /wp-codebox fixture console error/)
+assert.match(consoleLog, /wp-codebox fixture browser script/)
 assert.match(errorLog, /wp-codebox fixture browser error/)
 assert.match(htmlSnapshot, /Browser Error Fixture|wp-codebox fixture console error/)
 assert.match(networkLog, /"type":"response"/)
@@ -89,7 +96,7 @@ const summary = JSON.parse(await readFile(summaryPath, "utf8")) as {
   files: { html?: string; network?: string; screenshot?: string }
   hashes: { html?: { value: string }; screenshot?: { value: string } }
   viewport: { width: number; height: number; userAgent: string }
-  summary: { replayability: string; networkEvents: number; htmlSnapshot: boolean }
+  summary: { replayability: string; networkEvents: number; htmlSnapshot: boolean; scriptResult?: { title?: string; hasBody?: boolean } }
 }
 assert.equal(summary.requestedUrl.endsWith("/"), true, "summary should include requested URL")
 assert.equal(summary.finalUrl.endsWith("/"), true, "summary should include final URL")
@@ -99,6 +106,8 @@ assert.match(summary.hashes.html?.value ?? "", /^[a-f0-9]{64}$/)
 assert.match(summary.hashes.screenshot?.value ?? "", /^[a-f0-9]{64}$/)
 assert.equal(summary.summary.replayability, "artifact-backed")
 assert.equal(summary.summary.htmlSnapshot, true)
+assert.equal(summary.summary.scriptResult?.title, "My WordPress Website")
+assert.equal(summary.summary.scriptResult?.hasBody, true)
 assert.ok(summary.summary.networkEvents >= 1, "summary should count network events")
 assert.ok(summary.viewport.width > 0, "summary should include viewport width")
 assert.ok(summary.viewport.height > 0, "summary should include viewport height")
