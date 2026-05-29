@@ -303,7 +303,7 @@ final class WP_Codebox_Abilities {
 							'orchestrator'       => $session_input['orchestrator'],
 							'playground'         => array(
 								'type'        => 'object',
-								'description' => 'Optional browser Playground client configuration overrides.',
+								'description' => 'Optional browser Playground client and artifact preview configuration overrides.',
 							),
 							'blueprint'          => array(
 								'type'        => 'object',
@@ -769,11 +769,14 @@ final class WP_Codebox_Abilities {
 			),
 			'task_input' => $task_input,
 			'playground' => array(
-				'client_module_url' => (string) ( $playground['client_module_url'] ?? 'https://playground.automattic.ai/client/index.js' ),
-				'remote_url'        => (string) ( $playground['remote_url'] ?? 'https://playground.automattic.ai/remote.html' ),
-				'scope'             => (string) ( $playground['scope'] ?? $session_id ),
-				'blueprint'         => self::browser_playground_blueprint( $blueprint, $playground ),
-				'capabilities'      => array(
+				'client_module_url'  => (string) ( $playground['client_module_url'] ?? 'https://playground.automattic.ai/client/index.js' ),
+				'remote_url'         => (string) ( $playground['remote_url'] ?? 'https://playground.automattic.ai/remote.html' ),
+				'scope'              => (string) ( $playground['scope'] ?? $session_id ),
+				'artifact_base_path' => self::browser_artifact_base_path( $playground ),
+				'artifact_base_url'  => self::browser_artifact_base_url( $playground ),
+				'preview_url'        => self::browser_preview_url( $artifacts, $playground ),
+				'blueprint'          => self::browser_playground_blueprint( $blueprint, $playground ),
+				'capabilities'       => array(
 					'compile_blueprint' => true,
 					'run_blueprint'     => true,
 					'write_file'        => true,
@@ -791,6 +794,7 @@ final class WP_Codebox_Abilities {
 			'artifacts'  => array(
 				'schema'             => 'wp-codebox/browser-artifacts/v1',
 				'files'              => $artifacts,
+				'preview_url'        => self::browser_preview_url( $artifacts, $playground ),
 				'expected_artifacts' => $task_input['expected_artifacts'],
 			),
 		);
@@ -864,7 +868,10 @@ final class WP_Codebox_Abilities {
 
 	/** @param array<string,mixed> $input Ability input. @return array<int,array<string,string>>|WP_Error */
 	private static function browser_artifact_files( array $input ): array|WP_Error {
-		$files = is_array( $input['artifact_files'] ?? null ) ? $input['artifact_files'] : array();
+		$files      = is_array( $input['artifact_files'] ?? null ) ? $input['artifact_files'] : array();
+		$playground = is_array( $input['playground'] ?? null ) ? $input['playground'] : array();
+		$base_path  = self::browser_artifact_base_path( $playground );
+		$base_url   = self::browser_artifact_base_url( $playground );
 		$normalized = array();
 		foreach ( $files as $index => $file ) {
 			if ( ! is_array( $file ) ) {
@@ -877,14 +884,47 @@ final class WP_Codebox_Abilities {
 			}
 
 			$normalized[] = array(
-				'path'        => $path,
-				'content'     => (string) ( $file['content'] ?? '' ),
-				'kind'        => (string) ( $file['kind'] ?? 'text' ),
-				'description' => (string) ( $file['description'] ?? '' ),
+				'path'            => $path,
+				'playground_path' => self::join_browser_path( $base_path, $path ),
+				'url_path'        => self::join_browser_path( $base_url, $path ),
+				'content'         => (string) ( $file['content'] ?? '' ),
+				'kind'            => (string) ( $file['kind'] ?? 'text' ),
+				'description'     => (string) ( $file['description'] ?? '' ),
 			);
 		}
 
 		return $normalized;
+	}
+
+	/** @param array<string,mixed> $playground Playground config. */
+	private static function browser_artifact_base_path( array $playground ): string {
+		return self::normalize_absolute_browser_path( (string) ( $playground['artifact_base_path'] ?? '/wordpress/wp-content/uploads/wp-codebox/artifacts' ) );
+	}
+
+	/** @param array<string,mixed> $playground Playground config. */
+	private static function browser_artifact_base_url( array $playground ): string {
+		return self::normalize_absolute_browser_path( (string) ( $playground['artifact_base_url'] ?? '/wp-content/uploads/wp-codebox/artifacts' ) );
+	}
+
+	/** @param array<int,array<string,string>> $artifacts Artifact files. @param array<string,mixed> $playground Playground config. */
+	private static function browser_preview_url( array $artifacts, array $playground ): string {
+		$preview_url = trim( (string) ( $playground['preview_url'] ?? '' ) );
+		if ( '' !== $preview_url ) {
+			return self::normalize_absolute_browser_path( $preview_url );
+		}
+
+		$first_file = $artifacts[0]['url_path'] ?? '';
+		return '' !== $first_file ? $first_file : '/';
+	}
+
+	private static function normalize_absolute_browser_path( string $path ): string {
+		$path = '/' . ltrim( trim( $path ), '/' );
+		$path = rtrim( $path, '/' );
+		return '' === $path ? '/' : $path;
+	}
+
+	private static function join_browser_path( string $base, string $path ): string {
+		return rtrim( $base, '/' ) . '/' . ltrim( $path, '/' );
 	}
 
 	/** @param array<string,mixed> $blueprint Blueprint override. @param array<string,mixed> $playground Playground config. @return array<string,mixed> */
