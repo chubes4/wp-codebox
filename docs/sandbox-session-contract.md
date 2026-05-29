@@ -23,6 +23,35 @@ The host WP Codebox plugin should not depend on a specific parent job system.
 Data Machine, Homeboy, DMC, Studio, or a custom host app can all be external
 orchestrators that consume the same abilities and artifact contracts.
 
+## Browser Playground Permission Model
+
+`wp-codebox/create-browser-playground-session` returns an explicit browser
+session boundary:
+
+```json
+{
+  "execution": "browser-playground",
+  "execution_scope": "disposable-playground",
+  "permission_model": "sandbox-bypass",
+  "session": {
+    "execution_scope": "disposable-playground",
+    "permission_model": "sandbox-bypass"
+  }
+}
+```
+
+The `sandbox-bypass` permission model means the generated browser runner
+temporarily bypasses `agents/chat` permission checks inside the disposable
+Playground site so the sandbox agent can run without inheriting host-site user
+state. This is safe only because the browser runner executes in PHP-WASM inside
+the caller-owned Playground filesystem and cannot grant permissions on the host
+WordPress site.
+
+The generated PHP runner validates the expected Playground environment before it
+adds the `agents_chat_permission` bypass. If the runner is copied into a normal
+host WordPress install, it fails with `wp_codebox_browser_runner_not_playground`
+instead of executing `agents/chat`.
+
 ## Request Fields
 
 `wp-codebox/run-agent-task` and `wp-codebox/run-agent-task-batch` accept these

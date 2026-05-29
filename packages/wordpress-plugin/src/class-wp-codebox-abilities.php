@@ -738,6 +738,16 @@ final class WP_Codebox_Abilities {
 					'enum'        => array( 'browser-playground' ),
 					'description' => 'The caller browser executes WordPress Playground; the host site does not run the WP Codebox CLI.',
 				),
+				'execution_scope'  => array(
+					'type'        => 'string',
+					'enum'        => array( 'disposable-playground' ),
+					'description' => 'Browser sessions run inside a disposable WordPress Playground sandbox, not the host site.',
+				),
+				'permission_model' => array(
+					'type'        => 'string',
+					'enum'        => array( 'sandbox-bypass' ),
+					'description' => 'The generated browser runner bypasses agents/chat permission checks only inside the disposable Playground sandbox.',
+				),
 				'session'    => array( 'type' => 'object' ),
 				'task_input' => self::task_input_schema(),
 				'playground' => array( 'type' => 'object' ),
@@ -839,14 +849,18 @@ final class WP_Codebox_Abilities {
 		}
 
 		return array(
-			'success'    => true,
-			'schema'     => 'wp-codebox/browser-playground-session/v1',
-			'execution'  => 'browser-playground',
-			'session'    => array(
+			'success'          => true,
+			'schema'           => 'wp-codebox/browser-playground-session/v1',
+			'execution'        => 'browser-playground',
+			'execution_scope'  => 'disposable-playground',
+			'permission_model' => 'sandbox-bypass',
+			'session'          => array(
 				'schema'       => 'wp-codebox/browser-playground-session/v1',
 				'id'           => $session_id,
 				'status'       => 'ready',
 				'persistence'  => 'external-orchestrator',
+				'execution_scope'  => 'disposable-playground',
+				'permission_model' => 'sandbox-bypass',
 				'orchestrator' => is_array( $input['orchestrator'] ?? null ) ? $input['orchestrator'] : array(),
 			),
 			'task_input' => $task_input,
@@ -1258,6 +1272,9 @@ $task_path = ' . var_export( $task_path, true ) . ';
 $result_path = ' . var_export( $result_path, true ) . ';
 $payload = ' . var_export( $default_payload, true ) . ';
 
+$wp_codebox_playground_root = defined( \'ABSPATH\' ) ? wp_normalize_path( ABSPATH ) : \'\';
+$wp_codebox_is_playground = \'Emscripten\' === PHP_OS_FAMILY && \'/wordpress/\' === $wp_codebox_playground_root;
+
 if ( is_readable( $task_path ) ) {
 	$raw_payload = json_decode( (string) file_get_contents( $task_path ), true );
 	if ( is_array( $raw_payload ) ) {
@@ -1286,7 +1303,21 @@ $input = array(
 );
 
 $ability = function_exists( \'wp_get_ability\' ) ? wp_get_ability( \'agents/chat\' ) : null;
-if ( ! $ability instanceof WP_Ability ) {
+if ( ! $wp_codebox_is_playground ) {
+	$result = array(
+		\'success\' => false,
+		\'error\' => array(
+			\'code\' => \'wp_codebox_browser_runner_not_playground\',
+			\'message\' => \'The browser agent runner permission bypass is only allowed inside the disposable WordPress Playground sandbox.\',
+			\'data\' => array(
+				\'execution_scope\' => \'disposable-playground\',
+				\'permission_model\' => \'sandbox-bypass\',
+				\'detected_root\' => $wp_codebox_playground_root,
+				\'detected_php_os_family\' => PHP_OS_FAMILY,
+			),
+		),
+	);
+} elseif ( ! $ability instanceof WP_Ability ) {
 	$result = array(
 		\'success\' => false,
 		\'error\' => array(
@@ -1313,6 +1344,8 @@ if ( ! $ability instanceof WP_Ability ) {
 			\'success\' => true,
 			\'schema\' => \'wp-codebox/browser-agent-run/v1\',
 			\'session_id\' => $session_id,
+			\'execution_scope\' => \'disposable-playground\',
+			\'permission_model\' => \'sandbox-bypass\',
 			\'task_input\' => $payload[\'task_input\'] ?? array(),
 			\'response\' => $response,
 			\'artifacts\' => $payload[\'artifacts\'] ?? array(),
