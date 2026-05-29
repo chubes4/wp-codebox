@@ -780,7 +780,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	private function task_input( array $input ): array|WP_Error {
-		return WP_Codebox_Agent_Task::normalize_input( $input, fn( array $tools ): WP_Error|null => $this->allowed_tools_error( $tools ) );
+		return WP_Codebox_Agent_Task::normalize_input( $input, fn( array $tools ): WP_Error|null => $this->validate_allowed_tools( $tools ) );
 	}
 
 	/** @param array<string,mixed> $input Ability input. @return array<int,array<string,mixed>>|WP_Error */
