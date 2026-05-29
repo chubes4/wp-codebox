@@ -3,6 +3,7 @@
   "extensions": {
     "nodejs": {}
   },
+  "build_command": "npm run package:wordpress-plugin",
   "build_artifact": "packages/wordpress-plugin/dist/wp-codebox.zip",
   "version_targets": [
     {
