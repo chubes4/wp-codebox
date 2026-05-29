@@ -70,7 +70,7 @@ export function parsePreviewHoldSeconds(value: unknown): number {
 }
 
 export function parsePreviewPort(value: unknown): number {
-  const port = parsePreviewPortValue(value)
+  const port = parsePreviewPortValue(value, "--preview-port")
   if (port === null) {
     throw new PreviewOptionError("wp_codebox_preview_port_invalid", "--preview-port must be an integer between 1 and 65535")
   }
@@ -104,19 +104,19 @@ function parsePreviewHoldSecondsValue(value: unknown): number {
   return Math.max(0, Math.min(PREVIEW_HOLD_MAX_SECONDS, Math.floor(seconds)))
 }
 
-function parsePreviewPortValue(value: unknown): number | null {
+function parsePreviewPortValue(value: unknown, label = "preview_port"): number | null {
   if (value === undefined || value === null || String(value).trim() === "") {
     return null
   }
 
   const trimmed = String(value).trim()
   if (!/^\d+$/.test(trimmed)) {
-    throw new PreviewOptionError("wp_codebox_preview_port_invalid", "preview_port must be an integer between 1 and 65535.")
+    throw new PreviewOptionError("wp_codebox_preview_port_invalid", `${label} must be an integer between 1 and 65535.`)
   }
 
   const port = Number.parseInt(trimmed, 10)
   if (!Number.isSafeInteger(port) || port < PREVIEW_PORT_MIN || port > PREVIEW_PORT_MAX) {
-    throw new PreviewOptionError("wp_codebox_preview_port_invalid", "preview_port must be an integer between 1 and 65535.")
+    throw new PreviewOptionError("wp_codebox_preview_port_invalid", `${label} must be an integer between 1 and 65535.`)
   }
 
   return port

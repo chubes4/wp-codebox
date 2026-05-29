@@ -355,6 +355,7 @@ $GLOBALS['wp_codebox_filters']['wp_codebox_default_provider'] = 'openai';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_model'] = 'gpt-5.5';
 $GLOBALS['wp_codebox_filters']['wp_codebox_default_secret_env'] = array( 'OPENAI_API_KEY' );
 $GLOBALS['wp_codebox_filters']['wp_codebox_browser_plugin_allowed_hosts'] = array( 'example.test', 'downloads.wordpress.org' );
+$GLOBALS['wp_codebox_filters']['wp_codebox_browser_theme_allowed_hosts'] = array( 'example.test', 'downloads.wordpress.org' );
 $GLOBALS['wp_codebox_mock_abilities']['agents/chat'] = new WP_Ability();
 mkdir( $root . '/plugin-root/data-machine', 0777, true );
 mkdir( $root . '/plugin-root/data-machine-code', 0777, true );
@@ -377,6 +378,43 @@ $browser_session = call_user_func(
 				'sha256' => str_repeat( 'a', 64 ),
 			),
 		),
+		'runtime'               => array(
+			'plugins'    => array(
+				array(
+					'slug'     => 'static-site-importer',
+					'url'      => 'https://example.test/static-site-importer.zip',
+					'activate' => false,
+				),
+			),
+			'mu_plugins' => array(
+				array(
+					'slug'    => 'studio-web-review',
+					'file'    => 'studio-web-review.php',
+					'content' => '<?php add_filter( "wp_codebox_review", "__return_true" );',
+				),
+			),
+			'themes'     => array(
+				array(
+					'slug'     => 'studio-starter',
+					'activate' => true,
+					'files'    => array(
+						array(
+							'path'    => 'style.css',
+							'content' => '/* Theme Name: Studio Starter */',
+						),
+					),
+				),
+			),
+			'bootstrap'  => array(
+				array(
+					'operation' => 'set_option',
+					'args'      => array(
+						'name'  => 'blogname',
+						'value' => 'Studio Preview',
+					),
+				),
+			),
+		),
 		'artifact_files'        => array(
 			array(
 				'path'    => 'static-site/index.html',
@@ -397,12 +435,18 @@ $assert( 'browser Playground session includes default blueprint', ! is_wp_error(
 $assert( 'browser Playground session defaults to latest WordPress and PHP', ! is_wp_error( $browser_session ) && 'latest' === ( $browser_session['playground']['blueprint']['preferredVersions']['wp'] ?? '' ) && 'latest' === ( $browser_session['playground']['blueprint']['preferredVersions']['php'] ?? '' ) );
 $assert( 'browser Playground session logs in before admin workflows', ! is_wp_error( $browser_session ) && 'login' === ( $browser_session['playground']['blueprint']['steps'][0]['step'] ?? '' ) && 'admin' === ( $browser_session['playground']['blueprint']['steps'][0]['username'] ?? '' ) );
 $assert( 'browser Playground session installs browser plugins', ! is_wp_error( $browser_session ) && 'installPlugin' === ( $browser_session['playground']['blueprint']['steps'][1]['step'] ?? '' ) && 'https://example.test/agents-api.zip' === ( $browser_session['playground']['blueprint']['steps'][1]['pluginData']['url'] ?? '' ) );
+$assert( 'browser Playground session accepts structured runtime dependencies', ! is_wp_error( $browser_session ) && 'wp-codebox/browser-runtime-dependencies/v1' === ( $browser_session['runtime']['schema'] ?? '' ) && 2 === ( $browser_session['runtime']['summary']['plugins'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['mu_plugins'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['themes'] ?? 0 ) && 1 === ( $browser_session['runtime']['summary']['bootstrap'] ?? 0 ) );
+$assert( 'browser Playground session compiles structured runtime plugins after legacy browser plugins', ! is_wp_error( $browser_session ) && 'installPlugin' === ( $browser_session['playground']['blueprint']['steps'][2]['step'] ?? '' ) && 'https://example.test/static-site-importer.zip' === ( $browser_session['playground']['blueprint']['steps'][2]['pluginData']['url'] ?? '' ) && false === ( $browser_session['playground']['blueprint']['steps'][2]['options']['activate'] ?? true ) );
+$assert( 'browser Playground session compiles mu-plugin runtime dependency', ! is_wp_error( $browser_session ) && 'runPHP' === ( $browser_session['playground']['blueprint']['steps'][3]['step'] ?? '' ) && str_contains( (string) ( $browser_session['playground']['blueprint']['steps'][3]['code'] ?? '' ), '/wordpress/wp-content/mu-plugins/studio-web-review.php' ) );
+$assert( 'browser Playground session compiles theme runtime dependency', ! is_wp_error( $browser_session ) && 'runPHP' === ( $browser_session['playground']['blueprint']['steps'][4]['step'] ?? '' ) && str_contains( (string) ( $browser_session['playground']['blueprint']['steps'][4]['code'] ?? '' ), '/wordpress/wp-content/themes/studio-starter/style.css' ) && str_contains( (string) ( $browser_session['playground']['blueprint']['steps'][4]['code'] ?? '' ), "switch_theme( 'studio-starter' )" ) );
+$assert( 'browser Playground session compiles named bootstrap runtime operation', ! is_wp_error( $browser_session ) && 'runPHP' === ( $browser_session['playground']['blueprint']['steps'][5]['step'] ?? '' ) && str_contains( (string) ( $browser_session['playground']['blueprint']['steps'][5]['code'] ?? '' ), "update_option( 'blogname', 'Studio Preview' )" ) );
 $assert( 'browser Playground session records trusted origins', ! is_wp_error( $browser_session ) && 'https://playground.automattic.ai' === ( $browser_session['playground']['provenance']['client_module_url']['origin'] ?? '' ) );
 $assert( 'browser Playground session records browser plugin provenance', ! is_wp_error( $browser_session ) && 'example.test' === ( $browser_session['plugins'][0]['provenance']['host'] ?? '' ) && str_repeat( 'a', 64 ) === ( $browser_session['plugins'][0]['provenance']['sha256'] ?? '' ) );
 $assert( 'browser Playground session includes recipe', ! is_wp_error( $browser_session ) && 'wp-codebox/workspace-recipe/v1' === ( $browser_session['recipe']['schema'] ?? '' ) );
 $assert( 'browser Playground recipe calls agents/chat inside site', ! is_wp_error( $browser_session ) && str_contains( (string) ( $browser_session['recipe']['workflow']['steps'][0]['args'][0] ?? '' ), "wp_get_ability( 'agents/chat' )" ) );
 $assert( 'browser Playground recipe guards permission bypass to Playground', ! is_wp_error( $browser_session ) && str_contains( (string) ( $browser_session['recipe']['workflow']['steps'][0]['args'][0] ?? '' ), "'Emscripten' === PHP_OS_FAMILY" ) && str_contains( (string) ( $browser_session['recipe']['workflow']['steps'][0]['args'][0] ?? '' ), 'wp_codebox_browser_runner_not_playground' ) );
-$assert( 'browser Playground session emits ready-to-code signal only when prerequisites are present', ! is_wp_error( $browser_session ) && true === ( $browser_session['signals']['ready_to_code']['emitted'] ?? false ) && 'ready_to_code' === ( $browser_session['signals']['ready_to_code']['name'] ?? '' ) && true === ( $browser_session['signals']['ready_to_code']['requirements']['agents_api'] ?? false ) && true === ( $browser_session['signals']['ready_to_code']['requirements']['provider_secret'] ?? false ) );
+$assert( 'browser Playground session emits ready-to-code signal only when prerequisites are present', ! is_wp_error( $browser_session ) && true === ( $browser_session['signals']['ready_to_code']['emitted'] ?? false ) && 'ready_to_code' === ( $browser_session['signals']['ready_to_code']['name'] ?? '' ) && true === ( $browser_session['signals']['ready_to_code']['requirements']['agents_api'] ?? false ) && true === ( $browser_session['signals']['ready_to_code']['requirements']['provider_secret'] ?? false ) && true === ( $browser_session['signals']['ready_to_code']['requirements']['runtime_dependencies'] ?? false ) );
+$assert( 'browser Playground session exposes runtime dependency readiness metadata', ! is_wp_error( $browser_session ) && 'wp-codebox/browser-runtime-readiness/v1' === ( $browser_session['signals']['ready_to_code']['requirement_metadata']['runtime_dependencies']['schema'] ?? '' ) && 'studio-web-review' === ( $browser_session['signals']['ready_to_code']['requirement_metadata']['runtime_dependencies']['mu_plugins'][0]['slug'] ?? '' ) && 'studio-starter' === ( $browser_session['signals']['ready_to_code']['requirement_metadata']['runtime_dependencies']['themes'][0]['slug'] ?? '' ) );
 $assert( 'browser Playground session preserves safe artifact files', ! is_wp_error( $browser_session ) && 'static-site/index.html' === ( $browser_session['artifacts']['files'][0]['path'] ?? '' ) );
 $assert( 'browser Playground session exposes artifact write paths', ! is_wp_error( $browser_session ) && '/wordpress/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['files'][0]['playground_path'] ?? '' ) );
 $assert( 'browser Playground session exposes artifact URL paths', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['files'][0]['url_path'] ?? '' ) );

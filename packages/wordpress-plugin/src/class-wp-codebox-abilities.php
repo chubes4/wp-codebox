@@ -335,6 +335,16 @@ final class WP_Codebox_Abilities {
 									),
 								),
 							),
+							'runtime'            => array(
+								'type'        => 'object',
+								'description' => 'Structured browser Playground runtime dependencies compiled by WP Codebox into the session blueprint.',
+								'properties'  => array(
+									'plugins'    => array( 'type' => 'array' ),
+									'mu_plugins' => array( 'type' => 'array' ),
+									'themes'     => array( 'type' => 'array' ),
+									'bootstrap'  => array( 'type' => 'array' ),
+								),
+							),
 							'blueprint'          => array(
 								'type'        => 'object',
 								'description' => 'Optional WordPress Playground blueprint for the browser to compile and run.',
@@ -743,6 +753,7 @@ final class WP_Codebox_Abilities {
 				'session'    => array( 'type' => 'object' ),
 				'task_input' => self::task_input_schema(),
 				'playground' => array( 'type' => 'object' ),
+				'runtime'    => array( 'type' => 'object' ),
 				'recipe'     => array( 'type' => 'object' ),
 				'signals'    => array( 'type' => 'object' ),
 				'artifacts'  => array( 'type' => 'object' ),
@@ -782,20 +793,25 @@ final class WP_Codebox_Abilities {
 			return $playground;
 		}
 
-		$browser_runner = is_array( $input['browser_runner'] ?? null ) ? $input['browser_runner'] : array();
-		$browser_plugins = self::browser_plugins( $input );
-		if ( is_wp_error( $browser_plugins ) ) {
-			return $browser_plugins;
+		$browser_runner  = is_array( $input['browser_runner'] ?? null ) ? $input['browser_runner'] : array();
+		$legacy_plugins  = self::browser_plugins( $input );
+		if ( is_wp_error( $legacy_plugins ) ) {
+			return $legacy_plugins;
 		}
+		$runtime = self::browser_runtime_dependencies( $input, $legacy_plugins );
+		if ( is_wp_error( $runtime ) ) {
+			return $runtime;
+		}
+		$browser_plugins = $runtime['plugins'];
 
-		$blueprint      = self::browser_blueprint_with_plugins( is_array( $input['blueprint'] ?? null ) ? $input['blueprint'] : array(), $browser_plugins, $playground );
+		$blueprint      = self::browser_blueprint_with_runtime( is_array( $input['blueprint'] ?? null ) ? $input['blueprint'] : array(), $runtime, $playground );
 		$artifacts      = self::browser_artifact_files( $input );
 		if ( is_wp_error( $artifacts ) ) {
 			return $artifacts;
 		}
-		$ready_to_code = self::browser_ready_to_code_signal( $input );
+		$ready_to_code = self::browser_ready_to_code_signal( $input, $runtime );
 		if ( false === ( $ready_to_code['emitted'] ?? false ) ) {
-			return self::blocked_browser_playground_session( $session_id, $input, $task_input, $ready_to_code, $browser_plugins, $artifacts, $playground, $blueprint );
+			return self::blocked_browser_playground_session( $session_id, $input, $task_input, $ready_to_code, $browser_plugins, $runtime, $artifacts, $playground, $blueprint );
 		}
 
 		$recipe = self::browser_agent_recipe( $task_input, $session_id, $browser_runner, $blueprint, $playground );
@@ -814,6 +830,7 @@ final class WP_Codebox_Abilities {
 			'task_input' => $task_input,
 			'agent'      => (string) ( $input['agent'] ?? 'wp-codebox-sandbox' ),
 			'plugins'    => $browser_plugins,
+			'runtime'    => $runtime,
 			'playground' => array(
 				'client_module_url'  => $playground['client_module_url'],
 				'remote_url'         => $playground['remote_url'],
@@ -848,12 +865,13 @@ final class WP_Codebox_Abilities {
 	 * @param array<string,mixed> $task_input Normalized task input.
 	 * @param array<string,mixed> $ready_to_code Readiness signal.
 	 * @param array<int,array<string,string>> $browser_plugins Browser plugin specs.
+	 * @param array<string,mixed> $runtime Normalized runtime dependency specs.
 	 * @param array<int,array<string,string>> $artifacts Browser artifact specs.
 	 * @param array<string,mixed> $playground Playground input.
 	 * @param array<string,mixed> $blueprint Playground blueprint.
 	 * @return array<string,mixed>
 	 */
-	private static function blocked_browser_playground_session( string $session_id, array $input, array $task_input, array $ready_to_code, array $browser_plugins, array $artifacts, array $playground, array $blueprint ): array {
+	private static function blocked_browser_playground_session( string $session_id, array $input, array $task_input, array $ready_to_code, array $browser_plugins, array $runtime, array $artifacts, array $playground, array $blueprint ): array {
 		return array(
 			'success'          => false,
 			'schema'           => 'wp-codebox/browser-playground-session/v1',
@@ -871,6 +889,7 @@ final class WP_Codebox_Abilities {
 			'task_input' => $task_input,
 			'agent'      => (string) ( $input['agent'] ?? 'wp-codebox-sandbox' ),
 			'plugins'    => $browser_plugins,
+			'runtime'    => $runtime,
 			'playground' => array(
 				'client_module_url'  => $playground['client_module_url'],
 				'remote_url'         => $playground['remote_url'],
@@ -908,8 +927,8 @@ final class WP_Codebox_Abilities {
 		return $session;
 	}
 
-	/** @param array<string,mixed> $input Ability input. @return array<string,mixed> */
-	private static function browser_ready_to_code_signal( array $input ): array {
+	/** @param array<string,mixed> $input Ability input. @param array<string,mixed> $runtime Normalized runtime dependency specs. @return array<string,mixed> */
+	private static function browser_ready_to_code_signal( array $input, array $runtime ): array {
 		$provider_plugin_paths = array_values(
 			array_filter(
 				array_map( 'strval', is_array( $input['provider_plugin_paths'] ?? null ) ? $input['provider_plugin_paths'] : array() ),
@@ -925,6 +944,7 @@ final class WP_Codebox_Abilities {
 			'data_machine_code' => self::plugin_path_ready( 'data-machine-code' ),
 			'provider_plugin'   => ! empty( $provider_plugin_paths ) && self::all_paths_ready( $provider_plugin_paths ),
 			'provider_secret'   => ! empty( $connectors ) || ! empty( $secret_env ),
+			'runtime_dependencies' => true,
 		);
 
 		/**
@@ -944,6 +964,9 @@ final class WP_Codebox_Abilities {
 			'emitted'      => $emitted,
 			'message'      => $emitted ? 'Browser Playground sandbox is ready to code.' : 'Browser Playground sandbox is not ready to code.',
 			'requirements' => $requirements,
+			'requirement_metadata' => array(
+				'runtime_dependencies' => self::browser_runtime_readiness_metadata( $runtime ),
+			),
 			'missing'      => $missing,
 		);
 	}
@@ -1046,6 +1069,130 @@ final class WP_Codebox_Abilities {
 		return $normalized;
 	}
 
+	/** @param array<int,mixed> $mu_plugins Mu-plugin dependency specs. @return array<int,array<string,mixed>>|WP_Error */
+	private static function normalize_browser_mu_plugins( array $mu_plugins ): array|WP_Error {
+		$normalized = array();
+		foreach ( $mu_plugins as $index => $mu_plugin ) {
+			if ( ! is_array( $mu_plugin ) ) {
+				return new WP_Error( 'wp_codebox_browser_mu_plugin_invalid', 'Each browser mu-plugin must be an object.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$slug = self::safe_key( (string) ( $mu_plugin['slug'] ?? '' ) );
+			$file = trim( (string) ( $mu_plugin['file'] ?? ( '' !== $slug ? $slug . '.php' : '' ) ) );
+			if ( '' === $file || str_contains( $file, '..' ) || str_contains( $file, '/' ) || ! str_ends_with( $file, '.php' ) || ! preg_match( '#^[A-Za-z0-9_.-]+$#', $file ) ) {
+				return new WP_Error( 'wp_codebox_browser_mu_plugin_file_invalid', 'Browser mu-plugin files must be safe PHP filenames.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$content = (string) ( $mu_plugin['content'] ?? '' );
+			if ( '' === trim( $content ) ) {
+				return new WP_Error( 'wp_codebox_browser_mu_plugin_content_missing', 'Browser mu-plugin content is required.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$normalized[] = array(
+				'slug'            => '' !== $slug ? $slug : self::safe_key( basename( $file, '.php' ) ),
+				'file'            => $file,
+				'path'            => '/wordpress/wp-content/mu-plugins/' . $file,
+				'content'         => $content,
+				'readiness'       => 'compiled',
+			);
+		}
+
+		return $normalized;
+	}
+
+	/** @param array<int,mixed> $themes Theme dependency specs. @return array<int,array<string,mixed>>|WP_Error */
+	private static function normalize_browser_themes( array $themes ): array|WP_Error {
+		$normalized = array();
+		foreach ( $themes as $index => $theme ) {
+			if ( ! is_array( $theme ) ) {
+				return new WP_Error( 'wp_codebox_browser_theme_invalid', 'Each browser theme must be an object.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$slug  = self::safe_key( (string) ( $theme['slug'] ?? '' ) );
+			$url   = trim( (string) ( $theme['url'] ?? '' ) );
+			$files = is_array( $theme['files'] ?? null ) ? $theme['files'] : array();
+			if ( '' === $slug ) {
+				return new WP_Error( 'wp_codebox_browser_theme_slug_missing', 'Browser theme slug is required.', array( 'status' => 400, 'index' => $index ) );
+			}
+			if ( '' === $url && empty( $files ) ) {
+				return new WP_Error( 'wp_codebox_browser_theme_source_missing', 'Browser themes require a zip URL or files.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$source = null;
+			if ( '' !== $url ) {
+				$source = self::browser_theme_url( $url, $index );
+				if ( is_wp_error( $source ) ) {
+					return $source;
+				}
+			}
+
+			$normalized_files = self::normalize_browser_theme_files( $files, $slug, $index );
+			if ( is_wp_error( $normalized_files ) ) {
+				return $normalized_files;
+			}
+
+			$normalized[] = array_filter(
+				array(
+					'slug'       => $slug,
+					'url'        => $source['url'] ?? '',
+					'activate'   => ! array_key_exists( 'activate', $theme ) || (bool) $theme['activate'],
+					'files'      => $normalized_files,
+					'readiness'  => 'compiled',
+					'provenance' => $source ? array_filter( array( 'schema' => 'wp-codebox/browser-theme-provenance/v1', 'url' => $source['url'], 'origin' => $source['origin'], 'host' => $source['host'] ) ) : array(),
+				),
+				static fn( mixed $value ): bool => array() !== $value && '' !== $value
+			);
+		}
+
+		return $normalized;
+	}
+
+	/** @param array<int,mixed> $files Theme file specs. @return array<int,array<string,string>>|WP_Error */
+	private static function normalize_browser_theme_files( array $files, string $slug, int $theme_index ): array|WP_Error {
+		$normalized = array();
+		foreach ( $files as $index => $file ) {
+			if ( ! is_array( $file ) ) {
+				return new WP_Error( 'wp_codebox_browser_theme_file_invalid', 'Each browser theme file must be an object.', array( 'status' => 400, 'theme_index' => $theme_index, 'index' => $index ) );
+			}
+
+			$path = trim( (string) ( $file['path'] ?? '' ) );
+			if ( '' === $path || str_contains( $path, '..' ) || str_starts_with( $path, '/' ) || ! preg_match( '#^[A-Za-z0-9_./-]+$#', $path ) ) {
+				return new WP_Error( 'wp_codebox_browser_theme_file_path_invalid', 'Browser theme file paths must be safe relative paths.', array( 'status' => 400, 'theme_index' => $theme_index, 'index' => $index ) );
+			}
+
+			$normalized[] = array(
+				'path'            => $path,
+				'playground_path' => '/wordpress/wp-content/themes/' . $slug . '/' . $path,
+				'content'         => (string) ( $file['content'] ?? '' ),
+			);
+		}
+
+		return $normalized;
+	}
+
+	/** @param array<int,mixed> $operations Bootstrap operation specs. @return array<int,array<string,mixed>>|WP_Error */
+	private static function normalize_browser_bootstrap( array $operations ): array|WP_Error {
+		$normalized = array();
+		foreach ( $operations as $index => $operation ) {
+			if ( ! is_array( $operation ) ) {
+				return new WP_Error( 'wp_codebox_browser_bootstrap_invalid', 'Each browser bootstrap operation must be an object.', array( 'status' => 400, 'index' => $index ) );
+			}
+
+			$name = self::safe_key( (string) ( $operation['operation'] ?? $operation['name'] ?? '' ) );
+			if ( ! in_array( $name, array( 'set_option', 'activate_plugin', 'activate_theme', 'flush_rewrite_rules' ), true ) ) {
+				return new WP_Error( 'wp_codebox_browser_bootstrap_operation_invalid', 'Browser bootstrap operation is not supported.', array( 'status' => 400, 'index' => $index, 'operation' => $name ) );
+			}
+
+			$normalized[] = array(
+				'operation' => $name,
+				'args'      => is_array( $operation['args'] ?? null ) ? $operation['args'] : array_diff_key( $operation, array( 'operation' => true, 'name' => true ) ),
+				'readiness' => 'compiled',
+			);
+		}
+
+		return $normalized;
+	}
+
 	/** @param array<string,mixed> $input Ability input. @return array<string,mixed>|WP_Error */
 	private static function browser_playground( array $input ): array|WP_Error {
 		$playground = is_array( $input['playground'] ?? null ) ? $input['playground'] : array();
@@ -1108,11 +1255,57 @@ final class WP_Codebox_Abilities {
 	/** @param array<string,mixed> $input Ability input. @return array<int,array<string,mixed>>|WP_Error */
 	private static function browser_plugins( array $input ): array|WP_Error {
 		$plugins = is_array( $input['browser_plugins'] ?? null ) ? $input['browser_plugins'] : array();
+		return self::normalize_browser_plugins( $plugins, 'browser_plugins' );
+	}
+
+	/** @param array<string,mixed> $input Ability input. @param array<int,array<string,mixed>> $legacy_plugins Legacy browser_plugins specs. @return array<string,mixed>|WP_Error */
+	private static function browser_runtime_dependencies( array $input, array $legacy_plugins ): array|WP_Error {
+		$runtime = is_array( $input['runtime'] ?? null ) ? $input['runtime'] : array();
+		$runtime_plugins = self::normalize_browser_plugins( is_array( $runtime['plugins'] ?? null ) ? $runtime['plugins'] : array(), 'runtime.plugins' );
+		if ( is_wp_error( $runtime_plugins ) ) {
+			return $runtime_plugins;
+		}
+
+		$mu_plugins = self::normalize_browser_mu_plugins( is_array( $runtime['mu_plugins'] ?? null ) ? $runtime['mu_plugins'] : array() );
+		if ( is_wp_error( $mu_plugins ) ) {
+			return $mu_plugins;
+		}
+
+		$themes = self::normalize_browser_themes( is_array( $runtime['themes'] ?? null ) ? $runtime['themes'] : array() );
+		if ( is_wp_error( $themes ) ) {
+			return $themes;
+		}
+
+		$bootstrap = self::normalize_browser_bootstrap( is_array( $runtime['bootstrap'] ?? null ) ? $runtime['bootstrap'] : array() );
+		if ( is_wp_error( $bootstrap ) ) {
+			return $bootstrap;
+		}
+
+		$plugins = array_values( array_merge( $legacy_plugins, $runtime_plugins ) );
+
+		return array(
+			'schema'                 => 'wp-codebox/browser-runtime-dependencies/v1',
+			'plugins'                => $plugins,
+			'mu_plugins'             => $mu_plugins,
+			'themes'                 => $themes,
+			'bootstrap'              => $bootstrap,
+			'legacy_browser_plugins' => count( $legacy_plugins ),
+			'summary'                => array(
+				'plugins'    => count( $plugins ),
+				'mu_plugins' => count( $mu_plugins ),
+				'themes'     => count( $themes ),
+				'bootstrap'  => count( $bootstrap ),
+			),
+		);
+	}
+
+	/** @param array<int,mixed> $plugins Plugin dependency specs. @return array<int,array<string,mixed>>|WP_Error */
+	private static function normalize_browser_plugins( array $plugins, string $field ): array|WP_Error {
 		$normalized = array();
 
 		foreach ( $plugins as $index => $plugin ) {
 			if ( ! is_array( $plugin ) ) {
-				return new WP_Error( 'wp_codebox_browser_plugin_invalid', 'Each browser plugin must be an object.', array( 'status' => 400, 'index' => $index ) );
+				return new WP_Error( 'wp_codebox_browser_plugin_invalid', 'Each browser plugin must be an object.', array( 'status' => 400, 'field' => $field, 'index' => $index ) );
 			}
 
 			$url = trim( (string) ( $plugin['url'] ?? '' ) );
@@ -1170,6 +1363,29 @@ final class WP_Codebox_Abilities {
 		return array( 'url' => $url, 'origin' => $origin, 'host' => $host );
 	}
 
+	/** @return array{url:string,origin:string,host:string}|WP_Error */
+	private static function browser_theme_url( string $url, int $index ): array|WP_Error {
+		$parts = wp_parse_url( $url );
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return new WP_Error( 'wp_codebox_browser_theme_url_invalid', 'Browser theme URL must be absolute.', array( 'status' => 400, 'index' => $index ) );
+		}
+
+		$scheme = strtolower( (string) $parts['scheme'] );
+		if ( 'https' !== $scheme ) {
+			return new WP_Error( 'wp_codebox_browser_theme_url_insecure', 'Browser theme URL must use https://.', array( 'status' => 400, 'index' => $index ) );
+		}
+
+		$origin        = self::url_origin( $parts );
+		$default_hosts = array( 'downloads.wordpress.org' );
+		$allowed_hosts = array_map( 'strtolower', self::string_list( apply_filters( 'wp_codebox_browser_theme_allowed_hosts', $default_hosts, $url, $index ) ) );
+		$host          = strtolower( (string) $parts['host'] );
+		if ( ! in_array( $host, $allowed_hosts, true ) ) {
+			return new WP_Error( 'wp_codebox_browser_theme_host_not_allowed', 'Browser theme URL host is not allowed.', array( 'status' => 400, 'index' => $index, 'host' => $host ) );
+		}
+
+		return array( 'url' => $url, 'origin' => $origin, 'host' => $host );
+	}
+
 	/** @param array<string,string|int> $parts URL parts. */
 	private static function url_origin( array $parts ): string {
 		$scheme = strtolower( (string) ( $parts['scheme'] ?? '' ) );
@@ -1198,8 +1414,8 @@ final class WP_Codebox_Abilities {
 		return strtolower( preg_replace( '/[^a-zA-Z0-9_-]/', '', $value ) ?? '' );
 	}
 
-	/** @param array<string,mixed> $blueprint Blueprint override. @param array<int,array<string,mixed>> $plugins Browser plugins. @return array<string,mixed> */
-	private static function browser_blueprint_with_plugins( array $blueprint, array $plugins, array $playground = array() ): array {
+	/** @param array<string,mixed> $blueprint Blueprint override. @param array<string,mixed> $runtime Runtime dependency specs. @return array<string,mixed> */
+	private static function browser_blueprint_with_runtime( array $blueprint, array $runtime, array $playground = array() ): array {
 		$steps = is_array( $blueprint['steps'] ?? null ) ? $blueprint['steps'] : array();
 		if ( ! self::browser_blueprint_has_login_step( $steps ) ) {
 			array_unshift(
@@ -1212,7 +1428,7 @@ final class WP_Codebox_Abilities {
 			);
 		}
 
-		foreach ( $plugins as $plugin ) {
+		foreach ( $runtime['plugins'] as $plugin ) {
 			$steps[] = array(
 				'step'       => 'installPlugin',
 				'pluginData' => array(
@@ -1222,6 +1438,42 @@ final class WP_Codebox_Abilities {
 				'options'    => array(
 					'activate' => (bool) $plugin['activate'],
 				),
+			);
+		}
+
+		foreach ( $runtime['mu_plugins'] as $mu_plugin ) {
+			$steps[] = array(
+				'step' => 'runPHP',
+				'code' => self::browser_mu_plugin_install_php( $mu_plugin ),
+			);
+		}
+
+		foreach ( $runtime['themes'] as $theme ) {
+			if ( ! empty( $theme['url'] ) ) {
+				$steps[] = array(
+					'step'      => 'installTheme',
+					'themeData' => array(
+						'resource' => 'url',
+						'url'      => $theme['url'],
+					),
+					'options'   => array(
+						'activate' => (bool) $theme['activate'],
+					),
+				);
+			}
+
+			if ( ! empty( $theme['files'] ) ) {
+				$steps[] = array(
+					'step' => 'runPHP',
+					'code' => self::browser_theme_files_install_php( $theme ),
+				);
+			}
+		}
+
+		foreach ( $runtime['bootstrap'] as $operation ) {
+			$steps[] = array(
+				'step' => 'runPHP',
+				'code' => self::browser_bootstrap_operation_php( $operation ),
 			);
 		}
 
@@ -1237,6 +1489,76 @@ final class WP_Codebox_Abilities {
 		}
 
 		return $blueprint;
+	}
+
+	/** @param array<string,mixed> $mu_plugin Mu-plugin spec. */
+	private static function browser_mu_plugin_install_php( array $mu_plugin ): string {
+		return '<?php
+$path = ' . var_export( $mu_plugin['path'], true ) . ';
+$directory = dirname( $path );
+if ( ! is_dir( $directory ) ) {
+	mkdir( $directory, 0777, true );
+}
+file_put_contents( $path, ' . var_export( $mu_plugin['content'], true ) . ' );
+';
+	}
+
+	/** @param array<string,mixed> $theme Theme spec. */
+	private static function browser_theme_files_install_php( array $theme ): string {
+		$files = array();
+		foreach ( $theme['files'] as $file ) {
+			$files[ $file['playground_path'] ] = $file['content'];
+		}
+
+		return '<?php
+$files = ' . var_export( $files, true ) . ';
+foreach ( $files as $path => $content ) {
+	$directory = dirname( $path );
+	if ( ! is_dir( $directory ) ) {
+		mkdir( $directory, 0777, true );
+	}
+	file_put_contents( $path, $content );
+}
+' . ( (bool) $theme['activate'] ? 'switch_theme( ' . var_export( $theme['slug'], true ) . ' );' : '' ) . '
+';
+	}
+
+	/** @param array<string,mixed> $operation Bootstrap operation spec. */
+	private static function browser_bootstrap_operation_php( array $operation ): string {
+		$args = is_array( $operation['args'] ?? null ) ? $operation['args'] : array();
+		switch ( $operation['operation'] ) {
+			case 'set_option':
+				return '<?php
+update_option( ' . var_export( (string) ( $args['name'] ?? $args['option'] ?? '' ), true ) . ', ' . var_export( $args['value'] ?? '', true ) . ' );
+';
+			case 'activate_plugin':
+				return '<?php
+activate_plugin( ' . var_export( (string) ( $args['plugin'] ?? '' ), true ) . ' );
+';
+			case 'activate_theme':
+				return '<?php
+switch_theme( ' . var_export( (string) ( $args['slug'] ?? $args['theme'] ?? '' ), true ) . ' );
+';
+			case 'flush_rewrite_rules':
+				return '<?php
+flush_rewrite_rules();
+';
+		}
+
+		return '<?php';
+	}
+
+	/** @param array<string,mixed> $runtime Runtime dependency specs. @return array<string,mixed> */
+	private static function browser_runtime_readiness_metadata( array $runtime ): array {
+		return array(
+			'schema'    => 'wp-codebox/browser-runtime-readiness/v1',
+			'compiled'  => true,
+			'summary'   => $runtime['summary'] ?? array(),
+			'plugins'   => array_map( static fn( array $plugin ): array => array( 'slug' => $plugin['slug'] ?? '', 'activate' => (bool) ( $plugin['activate'] ?? true ), 'readiness' => 'compiled' ), $runtime['plugins'] ?? array() ),
+			'mu_plugins' => array_map( static fn( array $mu_plugin ): array => array( 'slug' => $mu_plugin['slug'] ?? '', 'file' => $mu_plugin['file'] ?? '', 'readiness' => $mu_plugin['readiness'] ?? 'compiled' ), $runtime['mu_plugins'] ?? array() ),
+			'themes'    => array_map( static fn( array $theme ): array => array( 'slug' => $theme['slug'] ?? '', 'activate' => (bool) ( $theme['activate'] ?? true ), 'readiness' => $theme['readiness'] ?? 'compiled' ), $runtime['themes'] ?? array() ),
+			'bootstrap' => array_map( static fn( array $operation ): array => array( 'operation' => $operation['operation'] ?? '', 'readiness' => $operation['readiness'] ?? 'compiled' ), $runtime['bootstrap'] ?? array() ),
+		);
 	}
 
 	/** @param array<int,mixed> $steps Blueprint steps. */
