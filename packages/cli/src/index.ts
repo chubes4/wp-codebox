@@ -4699,6 +4699,18 @@ async function downloadRecipeSourceZip(url: string, targetPath: string, expected
     throw new Error(`Failed to download recipe source ${url}: HTTP ${response.status}`)
   }
 
+  const finalUrl = response.url || url
+  let finalSource: ReturnType<typeof recipeSource>
+  try {
+    finalSource = recipeSource(finalUrl, expectedSha256)
+  } catch (error) {
+    throw new Error(`Recipe source redirected to an invalid URL: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  if (finalSource.type === "local" || !allowedDownloadHosts().includes(finalSource.host)) {
+    throw new Error(`Recipe source redirected to a host that is not allowed: ${finalSource.host || finalUrl}`)
+  }
+
   const contentLength = Number(response.headers.get("content-length") ?? "0")
   if (contentLength > maxDownloadBytes()) {
     throw new Error(`Recipe source download exceeds ${maxDownloadBytes()} bytes: ${url}`)
