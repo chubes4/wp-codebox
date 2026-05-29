@@ -62,6 +62,47 @@ interface RuntimeWpCliBridge {
   close: () => Promise<void>
 }
 
+interface RuntimeWpCliCommandResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
+
+function runtimeWpCliCommandArgv(command: string): string[][] {
+  const tokens = shellArgv(command)
+  const commands: string[][] = []
+  let current: string[] = []
+
+  for (const token of tokens) {
+    if (token === "&&" || token === ";" || token === "||") {
+      if (current.length > 0) {
+        commands.push(runtimeWpCliNormalizeArgv(current))
+        current = []
+      }
+      if (token === "||") {
+        break
+      }
+      continue
+    }
+
+    if (token === "|") {
+      break
+    }
+
+    current.push(token)
+  }
+
+  if (current.length > 0) {
+    commands.push(runtimeWpCliNormalizeArgv(current))
+  }
+
+  return commands.filter((argv) => argv.length > 0)
+}
+
+function runtimeWpCliNormalizeArgv(argv: string[]): string[] {
+  return argv[0] === "wp" ? argv.slice(1) : argv
+}
+
 class PlaygroundCommandError extends Error {
   readonly code = "wp-codebox-playground-command-failed"
 
@@ -983,6 +1024,28 @@ class PlaygroundRuntime implements Runtime {
     return this.runPlaygroundCommand("wordpress.wp-cli", server, { scriptPath })
   }
 
+  private async runRuntimeWpCliBridgeCommand(server: PlaygroundCliServer, command: string): Promise<RuntimeWpCliCommandResult> {
+    const commands = runtimeWpCliCommandArgv(command)
+    if (commands.length === 0) {
+      throw new Error("wp_cli command is required")
+    }
+
+    let stdout = ""
+    let stderr = ""
+    let exitCode = 0
+    for (const argv of commands) {
+      const result = await this.runWpCliCommand(server, argv)
+      exitCode = result.exitCode ?? 0
+      stdout += cleanWpCliOutput(result.text)
+      stderr += result.errors ?? ""
+      if (exitCode !== 0) {
+        break
+      }
+    }
+
+    return { exitCode, stdout, stderr }
+  }
+
   private async createRuntimeWpCliBridge(server: PlaygroundCliServer): Promise<RuntimeWpCliBridge> {
     const token = randomBytes(24).toString("base64url")
     const bridge = createHttpServer(async (request, response) => {
@@ -1005,23 +1068,19 @@ class PlaygroundRuntime implements Runtime {
           return
         }
 
-        const argv = shellArgv(command)
-        if (argv[0] === "wp") {
-          argv.shift()
-        }
         const started = Date.now()
-        const result = await this.runWpCliCommand(server, argv)
-        const exitCode = result.exitCode ?? 0
+        const result = await this.runRuntimeWpCliBridgeCommand(server, command)
+        const exitCode = result.exitCode
         writeBridgeJson(response, 200, {
           type,
           command: command.startsWith("wp ") ? command : `wp ${command}`,
           exitCode,
-          stdout: cleanWpCliOutput(result.text),
-          stderr: result.errors ?? "",
+          stdout: result.stdout,
+          stderr: result.stderr,
           success: exitCode === 0,
           timedOut: false,
           durationMs: Date.now() - started,
-          error: exitCode === 0 ? "" : (result.errors?.trim() || cleanWpCliOutput(result.text).trim() || "WP-CLI command failed"),
+          error: exitCode === 0 ? "" : (result.stderr.trim() || result.stdout.trim() || "WP-CLI command failed"),
         })
       } catch (error) {
         writeBridgeJson(response, 500, { success: false, error: errorMessage(error) })
