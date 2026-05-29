@@ -45,6 +45,13 @@ writeFileSync(recipePath, `${JSON.stringify({
         slug: "simple-plugin",
         pluginFile: "simple-plugin/simple-plugin.php",
       },
+      {
+        source: "../../examples/simple-plugin",
+        slug: "simple-runtime",
+        pluginFile: "simple-runtime/simple-plugin.php",
+        activate: false,
+        loadAs: "mu-plugin",
+      },
     ],
     siteSeeds: [
       {
@@ -203,6 +210,9 @@ assert.equal(output.plan.workspaces[0].sourceMode, "site-backed")
 assert.equal(output.plan.workspaces[0].metadata.workspaceRoot, "/workspace")
 assert.equal(output.plan.workspaces[0].metadata.sourceMode, "site-backed")
 assert.equal(output.plan.extra_plugins[0].target, "/wordpress/wp-content/plugins/simple-plugin")
+assert.equal(output.plan.extra_plugins[0].loadAs, "plugin")
+assert.equal(output.plan.extra_plugins[1].target, "/wordpress/wp-content/mu-plugins/wp-codebox-runtime/simple-runtime")
+assert.equal(output.plan.extra_plugins[1].loadAs, "mu-plugin")
 assert.equal(output.plan.siteSeeds.length, 2)
 assert.equal(output.plan.siteSeeds[0].source, fixtureSeedPath)
 assert.equal(output.plan.siteSeeds[0].dryRunOnly, false)
@@ -216,13 +226,15 @@ assert.equal(output.plan.siteSeeds[1].privacy.importsIntoSandbox, false)
 assert.equal(output.plan.secretEnv[0].name, "DRY_RUN_TOKEN")
 assert.equal(Object.prototype.hasOwnProperty.call(output.plan.secretEnv[0], "value"), false)
 assert.equal(output.plan.secretEnv[0].available, true)
-assert.equal(output.plan.workflow.steps.length, 3)
-assert.equal(output.plan.workflow.steps[0].command, "activate-extra-plugins")
+assert.equal(output.plan.workflow.steps.length, 4)
+assert.equal(output.plan.workflow.steps[0].command, "install-mu-plugins")
 assert.equal(output.plan.workflow.steps[0].policy.status, "allowed")
-assert.equal(output.plan.workflow.steps[1].resolvedCommand, "wordpress.run-php")
-assert.equal(output.plan.workflow.steps[1].resolvedParsedArgs.code, "echo 'dry run';")
-assert.equal(output.plan.workflow.steps[2].parsedArgs.command, "option get home")
-assert.equal(output.plan.workflow.steps[2].policy.status, "allowed")
+assert.equal(output.plan.workflow.steps[1].command, "activate-extra-plugins")
+assert.equal(output.plan.workflow.steps[1].policy.status, "allowed")
+assert.equal(output.plan.workflow.steps[2].resolvedCommand, "wordpress.run-php")
+assert.equal(output.plan.workflow.steps[2].resolvedParsedArgs.code, "echo 'dry run';")
+assert.equal(output.plan.workflow.steps[3].parsedArgs.command, "option get home")
+assert.equal(output.plan.workflow.steps[3].policy.status, "allowed")
 assert.equal(output.runtime, undefined)
 assert.equal(output.executions, undefined)
 assert.equal(output.artifacts, undefined)

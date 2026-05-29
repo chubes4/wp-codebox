@@ -494,6 +494,7 @@ export interface WorkspaceRecipeExtraPlugin {
   pluginFile?: string
   activate?: boolean
   sha256?: string
+  loadAs?: "plugin" | "mu-plugin"
 }
 
 export type WorkspaceRecipeSiteSeedType = "fixture" | "parent_site"

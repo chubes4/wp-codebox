@@ -1806,6 +1806,7 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 				'source'   => $paths[ $key ],
 				'slug'     => $slug,
 				'activate' => false,
+				'loadAs'   => 'mu-plugin',
 			);
 		}
 

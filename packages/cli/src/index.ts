@@ -426,6 +426,7 @@ interface RecipeDryRunExtraPlugin {
   target: string
   pluginFile: string
   activate: boolean
+  loadAs: "plugin" | "mu-plugin"
   provenance: RecipeSourceProvenance
 }
 
@@ -534,6 +535,7 @@ interface PreparedExtraPlugin {
   target: string
   pluginFile: string
   activate: boolean
+  loadAs: "plugin" | "mu-plugin"
   cleanupPaths: string[]
   provenance: RecipeSourceProvenance
 }
@@ -1426,6 +1428,11 @@ async function runRecipe(options: RecipeRunOptions, interruption?: RecipeInterru
         metadata: stagedFile.metadata,
       }))
       interruption?.throwIfInterrupted()
+    }
+
+    const muPluginInstallCode = installMuPluginsCode(extraPlugins)
+    if (muPluginInstallCode) {
+      executions.push(withRecipeExecutionPhase(await runtime.execute({ command: "wordpress.run-php", args: [`code=${muPluginInstallCode}`] }), "setup", -2))
     }
 
     const pluginActivationCode = activateExtraPluginsCode(extraPlugins)
@@ -3247,6 +3254,10 @@ function parseWorkspaceRecipe(raw: string, recipePath: string): WorkspaceRecipe 
     if (plugin.slug && !/^[a-z0-9][a-z0-9-_]*$/i.test(plugin.slug)) {
       throw new Error(`Recipe extra_plugins slug must be a plugin-directory slug: ${recipePath}`)
     }
+
+    if (plugin.loadAs && plugin.loadAs !== "plugin" && plugin.loadAs !== "mu-plugin") {
+      throw new Error(`Recipe extra_plugins loadAs must be plugin or mu-plugin: ${recipePath}`)
+    }
   }
 
   const siteSeeds = recipe.inputs?.siteSeeds ?? []
@@ -3639,13 +3650,18 @@ async function recipeDryRunSteps(recipe: WorkspaceRecipe, recipeDirectory: strin
     return {
       source: plugin.source,
       slug,
-      target: `/wordpress/wp-content/plugins/${slug}`,
+      target: pluginTarget(slug, plugin.loadAs ?? "plugin"),
       pluginFile: await resolveRecipeExtraPluginFile(plugin, recipeDirectory),
       activate: plugin.activate !== false,
+      loadAs: plugin.loadAs ?? "plugin",
       cleanupPaths: [],
       provenance: recipeSourceProvenance(recipeSource(plugin.source, plugin.sha256), recipeDirectory),
     }
   }))
+  const muPluginInstallCode = installMuPluginsCode(dryRunExtraPlugins)
+  if (muPluginInstallCode) {
+    steps.push(recipeDryRunStep({ command: "wordpress.run-php", args: [`code=${muPluginInstallCode}`] }, recipeDirectory, policy, "setup", -2, "install-mu-plugins"))
+  }
   const pluginActivationCode = activateExtraPluginsCode(dryRunExtraPlugins)
   if (pluginActivationCode) {
     steps.push(recipeDryRunStep({ command: "wordpress.run-php", args: [`code=${pluginActivationCode}`] }, recipeDirectory, policy, "setup", -1, "activate-extra-plugins"))
@@ -3725,8 +3741,10 @@ function recipeRunMetadata(recipe: WorkspaceRecipe, recipePath: string, workspac
   const extraPluginMetadata = extraPlugins.map((plugin) => ({
     source: plugin.source,
     slug: plugin.slug,
+    target: plugin.target,
     pluginFile: plugin.pluginFile,
     activate: plugin.activate,
+    loadAs: plugin.loadAs,
     provenance: plugin.provenance,
   }))
   const siteSeedProvenance = recipeDryRunSiteSeeds(recipe, dirname(recipePath))
@@ -3828,9 +3846,10 @@ function recipeDryRunExtraPlugins(recipe: WorkspaceRecipe, recipeDirectory: stri
       sourceRef: plugin.source,
       sourceType: source.type,
       slug,
-      target: `/wordpress/wp-content/plugins/${slug}`,
+      target: pluginTarget(slug, plugin.loadAs ?? "plugin"),
       pluginFile: recipeExtraPluginFile(plugin),
       activate: plugin.activate !== false,
+      loadAs: plugin.loadAs ?? "plugin",
       provenance,
     }
   })
@@ -4433,13 +4452,15 @@ async function prepareRecipeExtraPlugins(recipe: WorkspaceRecipe, recipeDirector
     const slug = recipeExtraPluginSlug(plugin)
     const resolved = await prepareRecipeSource(plugin.source, recipeDirectory, slug, plugin.sha256)
     const pluginFile = await resolveRecipeExtraPluginFile(plugin, recipeDirectory)
+    const loadAs = plugin.loadAs ?? "plugin"
     await assertPreparedPluginFileExists(resolved.source, pluginFile.slice(slug.length + 1), plugin.source)
     plugins.push({
       source: resolved.source,
       slug,
-      target: `/wordpress/wp-content/plugins/${slug}`,
+      target: pluginTarget(slug, loadAs),
       pluginFile,
       activate: plugin.activate !== false,
+      loadAs,
       cleanupPaths: resolved.cleanupPaths,
       provenance: resolved.provenance,
     })
@@ -4854,6 +4875,14 @@ function recipeExtraPluginFile(plugin: WorkspaceRecipeExtraPlugin): string {
   return plugin.pluginFile ?? `${slug}/${slug}.php`
 }
 
+function pluginTarget(slug: string, loadAs: PreparedExtraPlugin["loadAs"]): string {
+  if (loadAs === "mu-plugin") {
+    return `/wordpress/wp-content/mu-plugins/wp-codebox-runtime/${slug}`
+  }
+
+  return `/wordpress/wp-content/plugins/${slug}`
+}
+
 async function resolveRecipeExtraPluginFile(plugin: WorkspaceRecipeExtraPlugin, recipeDirectory: string): Promise<string> {
   const slug = recipeExtraPluginSlug(plugin)
   if (plugin.pluginFile) {
@@ -4880,7 +4909,7 @@ async function resolveRecipeExtraPluginFile(plugin: WorkspaceRecipeExtraPlugin, 
 
 function activateExtraPluginsCode(extraPlugins: PreparedExtraPlugin[]): string | null {
   const pluginFiles = extraPlugins
-    .filter((plugin) => plugin.activate !== false)
+    .filter((plugin) => plugin.loadAs === "plugin" && plugin.activate !== false)
     .map((plugin) => plugin.pluginFile)
 
   if (pluginFiles.length === 0) {
@@ -4904,6 +4933,55 @@ foreach ($plugins as $plugin) {
     $activated[] = $plugin;
 }
 echo wp_json_encode(array('command' => 'activate-extra-plugins', 'plugins' => $activated), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);`
+}
+
+function installMuPluginsCode(extraPlugins: PreparedExtraPlugin[]): string | null {
+  const muPlugins = extraPlugins
+    .filter((plugin) => plugin.loadAs === "mu-plugin")
+    .map((plugin) => plugin.pluginFile)
+
+  if (muPlugins.length === 0) {
+    return null
+  }
+
+  return `$plugins = ${JSON.stringify(muPlugins)};
+$runtime_dir = WPMU_PLUGIN_DIR . '/wp-codebox-runtime';
+if (!is_dir(WPMU_PLUGIN_DIR) && !mkdir(WPMU_PLUGIN_DIR, 0777, true) && !is_dir(WPMU_PLUGIN_DIR)) {
+    throw new RuntimeException('Could not create mu-plugins directory.');
+}
+if (!is_dir($runtime_dir)) {
+    throw new RuntimeException('WP Codebox runtime mu-plugin directory is not mounted.');
+}
+$loader = WPMU_PLUGIN_DIR . '/wp-codebox-runtime-loader.php';
+$lines = array(
+    '<?php',
+    '/**',
+    ' * Plugin Name: WP Codebox Runtime Loader',
+    ' * Description: Loads WP Codebox runtime substrate as must-use plugins.',
+    ' */',
+    '',
+    "defined( 'ABSPATH' ) || exit;",
+    '',
+    "if ( ! defined( 'DATAMACHINE_WORKSPACE_PATH' ) ) {",
+    "    define( 'DATAMACHINE_WORKSPACE_PATH', ${JSON.stringify(SANDBOX_WORKSPACE_ROOT)} );",
+    "}",
+    "add_filter( 'datamachine_should_load_full_runtime', '__return_true', 1 );",
+    '',
+);
+foreach ($plugins as $plugin) {
+    if ('' === $plugin || str_starts_with($plugin, '/') || str_contains($plugin, '..') || !str_ends_with($plugin, '.php')) {
+        throw new RuntimeException('Unsafe WP Codebox runtime mu-plugin entry.');
+    }
+    $plugin_file = $runtime_dir . '/' . $plugin;
+    if (!file_exists($plugin_file)) {
+        throw new RuntimeException(sprintf('WP Codebox runtime mu-plugin is not mounted: %s', $plugin));
+    }
+    $lines[] = "require_once WPMU_PLUGIN_DIR . '/wp-codebox-runtime/" . str_replace("'", "\\'", $plugin) . "';";
+}
+if (false === file_put_contents($loader, implode("\\n", $lines) . "\\n")) {
+    throw new RuntimeException('Could not write WP Codebox runtime mu-plugin loader.');
+}
+echo wp_json_encode(array('command' => 'install-mu-plugins', 'plugins' => $plugins, 'loader' => $loader), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);`
 }
 
 function parseMount(value: string): RunOptions["mounts"][number] {

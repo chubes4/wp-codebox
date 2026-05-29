@@ -521,6 +521,8 @@ Dry-run output uses `wp-codebox/recipe-run-dry-run/v1` and includes resolved mou
 
 `inputs.extra_plugins` accepts existing local plugin directory paths and external HTTPS zip sources. Local paths keep the existing behavior: they are resolved relative to the recipe file and mounted read-only under `/wordpress/wp-content/plugins/<slug>`.
 
+Set `loadAs` to `mu-plugin` for runtime substrate that should load as must-use infrastructure instead of appearing as a normal user-managed plugin. WP Codebox mounts those plugins under `/wordpress/wp-content/mu-plugins/wp-codebox-runtime/<slug>` and writes a `wp-codebox-runtime-loader.php` setup loader. Use this for sandbox/runtime plumbing such as Agents API, Data Machine, Data Machine Code, and AI provider bridges. Leave user-visible site plugins as the default `plugin` load mode.
+
 External sources are explicit and CI-safe. WP Codebox validates URL-shaped sources before Playground boots, but it downloads them only when `WP_CODEBOX_ALLOW_NETWORK_DOWNLOADS=1` is set. Supported first-slice forms are WordPress.org plugin zip URLs and generic HTTPS `.zip` URLs:
 
 ```json
@@ -536,6 +538,13 @@ External sources are explicit and CI-safe. WP Codebox validates URL-shaped sourc
         "source": "https://example.com/acme-helper.zip",
         "slug": "acme-helper",
         "pluginFile": "acme-helper/acme-helper.php"
+      },
+      {
+        "source": "../agents-api",
+        "slug": "agents-api",
+        "pluginFile": "agents-api/agents-api.php",
+        "activate": false,
+        "loadAs": "mu-plugin"
       }
     ]
   }

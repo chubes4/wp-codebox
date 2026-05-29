@@ -750,6 +750,7 @@ $assert( 'runner recipe passes sandbox mode', str_contains( $captured_recipe, 's
 $assert( 'runner recipe passes default provider', str_contains( $captured_recipe, 'openai' ) );
 $assert( 'runner recipe passes default model', str_contains( $captured_recipe, 'gpt-5.5' ) );
 $assert( 'runner recipe passes provider plugin path', str_contains( $captured_recipe, 'ai-provider-test' ) );
+$assert( 'runner recipe loads runtime components as mu-plugins', str_contains( $captured_recipe, '"slug":"agents-api","activate":false,"loadAs":"mu-plugin"' ) && str_contains( $captured_recipe, '"slug":"data-machine","activate":false,"loadAs":"mu-plugin"' ) && str_contains( $captured_recipe, '"slug":"data-machine-code","activate":false,"loadAs":"mu-plugin"' ) );
 $assert( 'runner recipe passes generic mount metadata', str_contains( $captured_recipe, 'example/editable-plugin' ) && str_contains( $captured_recipe, 'repo_root_relative_to_mount' ) );
 $assert( 'runner recipe passes secret env name only', str_contains( $captured_recipe, 'GITHUB_TOKEN' ) && ! str_contains( $captured_recipe, 'GITHUB_TOKEN=' ) );
 $assert( 'runner does not pass raw code options', ! str_contains( $captured_command, '--code ' ) && ! str_contains( $captured_command, '--code-file' ) );

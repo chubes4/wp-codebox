@@ -406,6 +406,22 @@ $plugins = array_merge(array(
     'data-machine-code/data-machine-code.php',
 ), wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)));
 
+function wp_codebox_plugin_entry_path(string $plugin): ?array {
+    $plugin = ltrim($plugin, '/');
+    if ('' === $plugin || str_contains($plugin, '..') || !str_ends_with($plugin, '.php')) {
+        return null;
+    }
+    $normal_path = WP_PLUGIN_DIR . '/' . $plugin;
+    if (file_exists($normal_path)) {
+        return array('path' => $normal_path, 'load_as' => 'plugin');
+    }
+    $mu_path = WPMU_PLUGIN_DIR . '/wp-codebox-runtime/' . $plugin;
+    if (file_exists($mu_path)) {
+        return array('path' => $mu_path, 'load_as' => 'mu-plugin');
+    }
+    return null;
+}
+
 function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
     $entries = array();
     foreach ($provider_plugins as $plugin) {
@@ -415,7 +431,7 @@ function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
         }
         $candidates = array($slug . '/plugin.php', $slug . '/' . $slug . '.php');
         foreach ($candidates as $candidate) {
-            if (file_exists(WP_PLUGIN_DIR . '/' . $candidate)) {
+            if (wp_codebox_plugin_entry_path($candidate)) {
                 $entries[] = $candidate;
                 break;
             }
@@ -427,9 +443,20 @@ function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
 $activation_results = array();
 
 foreach ($plugins as $plugin) {
-    $result = activate_plugin($plugin);
+    $entry = wp_codebox_plugin_entry_path($plugin);
+    if (!$entry) {
+        $activation_results[$plugin] = array('active' => false, 'error' => 'Plugin is not mounted.');
+        continue;
+    }
+    $result = null;
+    if ('mu-plugin' === $entry['load_as']) {
+        require_once $entry['path'];
+    } else {
+        $result = activate_plugin($plugin);
+    }
     $activation_results[$plugin] = array(
-        'active' => is_plugin_active($plugin),
+        'active' => 'mu-plugin' === $entry['load_as'] ? true : is_plugin_active($plugin),
+        'load_as' => $entry['load_as'],
         'error' => is_wp_error($result) ? $result->get_error_message() : null,
     );
 }
@@ -491,6 +518,22 @@ $plugins = array_merge(array(
     'data-machine-code/data-machine-code.php',
 ), wp_codebox_provider_plugin_entries(json_decode(${JSON.stringify(JSON.stringify(providerPlugins))}, true)));
 
+function wp_codebox_plugin_entry_path(string $plugin): ?array {
+    $plugin = ltrim($plugin, '/');
+    if ('' === $plugin || str_contains($plugin, '..') || !str_ends_with($plugin, '.php')) {
+        return null;
+    }
+    $normal_path = WP_PLUGIN_DIR . '/' . $plugin;
+    if (file_exists($normal_path)) {
+        return array('path' => $normal_path, 'load_as' => 'plugin');
+    }
+    $mu_path = WPMU_PLUGIN_DIR . '/wp-codebox-runtime/' . $plugin;
+    if (file_exists($mu_path)) {
+        return array('path' => $mu_path, 'load_as' => 'mu-plugin');
+    }
+    return null;
+}
+
 function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
     $entries = array();
     foreach ($provider_plugins as $plugin) {
@@ -500,7 +543,7 @@ function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
         }
         $candidates = array($slug . '/plugin.php', $slug . '/' . $slug . '.php');
         foreach ($candidates as $candidate) {
-            if (file_exists(WP_PLUGIN_DIR . '/' . $candidate)) {
+            if (wp_codebox_plugin_entry_path($candidate)) {
                 $entries[] = $candidate;
                 break;
             }
@@ -512,9 +555,20 @@ function wp_codebox_provider_plugin_entries(array $provider_plugins): array {
 $activation_results = array();
 
 foreach ($plugins as $plugin) {
-    $result = activate_plugin($plugin);
+    $entry = wp_codebox_plugin_entry_path($plugin);
+    if (!$entry) {
+        $activation_results[$plugin] = array('active' => false, 'error' => 'Plugin is not mounted.');
+        continue;
+    }
+    $result = null;
+    if ('mu-plugin' === $entry['load_as']) {
+        require_once $entry['path'];
+    } else {
+        $result = activate_plugin($plugin);
+    }
     $activation_results[$plugin] = array(
-        'active' => is_plugin_active($plugin),
+        'active' => 'mu-plugin' === $entry['load_as'] ? true : is_plugin_active($plugin),
+        'load_as' => $entry['load_as'],
         'error' => is_wp_error($result) ? $result->get_error_message() : null,
     );
 }
