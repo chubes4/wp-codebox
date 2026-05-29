@@ -182,10 +182,11 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 			'task'      => $task,
 			'task_input' => $task_input,
 			'wp'        => $wp_version,
-			'paths'     => $paths,
-			'artifacts' => $artifacts,
-			'exit_code' => $exit_code,
-			'run'       => $decoded,
+			'paths'        => $paths,
+			'artifacts'    => $artifacts,
+			'exit_code'    => $exit_code,
+			'agent_result' => is_array( $decoded['agentResult'] ?? null ) ? $decoded['agentResult'] : array(),
+			'run'          => $decoded,
 		);
 
 		if ( null !== $outcome ) {
@@ -265,8 +266,9 @@ final class WP_Codebox_Agent_Sandbox_Runner {
 				'session'     => $task_result['session'] ?? array(),
 				'artifact_id' => (string) ( $task_result['session']['artifacts']['bundle_id'] ?? '' ),
 				'preview_url' => (string) ( $task_result['session']['artifacts']['preview_url'] ?? '' ),
-				'artifacts'   => $task_result['session']['artifacts'] ?? array(),
-				'run'         => $task_result['run'] ?? array(),
+				'artifacts'    => $task_result['session']['artifacts'] ?? array(),
+				'agent_result' => $task_result['agent_result'] ?? array(),
+				'run'          => $task_result['run'] ?? array(),
 			);
 		}
 

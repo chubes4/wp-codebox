@@ -727,6 +727,8 @@ export interface ArtifactReview {
     testResults?: string
     runtimeEpisodeTrace?: string
     runtimeReferenceManifest?: string
+    agentResult?: string
+    transcript?: string
   }
   browser?: ArtifactReviewBrowserSummary
   redaction?: ArtifactRedactionSummary

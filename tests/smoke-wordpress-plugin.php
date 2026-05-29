@@ -313,6 +313,26 @@ $runner           = new WP_Codebox_Agent_Sandbox_Runner(
 								'localUrl' => 'http://127.0.0.1:' . ( 12344 + $command_count ),
 							),
 						),
+						'agentResult' => array(
+							'schema'       => 'wp-codebox/agent-result/v1',
+							'status'       => 'completed',
+							'actionable'   => false,
+							'summary'      => 'Agent sandbox completed without actionable file changes.',
+							'noOpReason'   => 'no_file_changes',
+							'changedFiles' => array(
+								'count'    => 0,
+								'paths'    => array(),
+								'artifact' => 'files/changed-files.json',
+							),
+							'patch'        => array(
+								'bytes'    => 0,
+								'artifact' => 'files/patch.diff',
+							),
+							'transcript'   => array(
+								'artifact'       => 'files/transcript.json',
+								'executionCount' => 1,
+							),
+						),
 					)
 				),
 			);
@@ -360,6 +380,7 @@ $assert( 'runner returns caller-owned sandbox session envelope', ! is_wp_error( 
 $assert( 'runner keeps agent session separate from sandbox session', ! is_wp_error( $result ) && 'agent-chat-session-456' === ( $result['session']['agent_session_id'] ?? '' ) && str_contains( $captured_recipe, 'session-id=agent-chat-session-456' ) );
 $assert( 'runner returns orchestrator correlation and artifact refs', ! is_wp_error( $result ) && 'job-123' === ( $result['session']['orchestrator']['job_id'] ?? '' ) && 'artifact-bundle-sha256-fixture' === ( $result['session']['artifacts']['bundle_id'] ?? '' ) );
 $assert( 'runner returns public preview URL in session artifact metadata', ! is_wp_error( $result ) && 'https://preview.example.test/session-123/' === ( $result['session']['artifacts']['preview_url'] ?? '' ) && 'https://preview.example.test/session-123/' === ( $result['run']['artifacts']['preview']['url'] ?? '' ) );
+$assert( 'runner surfaces normalized agent result summary', ! is_wp_error( $result ) && 'wp-codebox/agent-result/v1' === ( $result['agent_result']['schema'] ?? '' ) && false === ( $result['agent_result']['actionable'] ?? true ) && 'no_file_changes' === ( $result['agent_result']['noOpReason'] ?? '' ) && 'files/transcript.json' === ( $result['agent_result']['transcript']['artifact'] ?? '' ) );
 $assert( 'runner returns normalized task input for legacy task', ! is_wp_error( $result ) && 'wp-codebox/task-input/v1' === ( $result['task_input']['schema'] ?? '' ) && 'Run a chat-requested sandbox task.' === ( $result['task_input']['goal'] ?? '' ) );
 $assert( 'runner invokes recipe-run', str_contains( $captured_command, 'recipe-run' ) );
 $assert( 'runner uses node for JS CLI', str_contains( $captured_command, 'node ' ) );
@@ -762,6 +783,7 @@ $assert( 'batch runner invokes recipe-run once per task', 2 === count( $batch_re
 $assert( 'batch runner emits one agent step per isolated recipe', 1 === substr_count( $batch_recipes[0] ?? '', 'wp-codebox.agent-sandbox-run' ) && 1 === substr_count( $batch_recipes[1] ?? '', 'wp-codebox.agent-sandbox-run' ) );
 $assert( 'batch runner returns sequential isolation contract', 'sequential-isolated-sandboxes' === ( $batch_result['execution'] ?? '' ) && ! array_key_exists( 'concurrency', $batch_result ) );
 $assert( 'batch runner returns per-task artifact refs', ! is_wp_error( $batch_result ) && '' !== ( $batch_result['runs'][0]['artifact_id'] ?? '' ) && '' !== ( $batch_result['runs'][1]['artifact_id'] ?? '' ) && ( $batch_result['runs'][0]['artifact_id'] ?? '' ) !== ( $batch_result['runs'][1]['artifact_id'] ?? '' ) );
+$assert( 'batch runner returns per-task agent result summaries', ! is_wp_error( $batch_result ) && 'wp-codebox/agent-result/v1' === ( $batch_result['runs'][0]['agent_result']['schema'] ?? '' ) && 'files/transcript.json' === ( $batch_result['runs'][1]['agent_result']['transcript']['artifact'] ?? '' ) );
 $assert( 'batch runner returns per-task preview URLs', ! is_wp_error( $batch_result ) && 'https://preview.example.test/batch/' === ( $batch_result['runs'][0]['preview_url'] ?? '' ) && 'https://preview.example.test/batch/' === ( $batch_result['runs'][1]['preview_url'] ?? '' ) );
 $assert( 'batch runner assigns per-task sandbox session ids', ! is_wp_error( $batch_result ) && 'parent-batch-789:1' === ( $batch_result['runs'][0]['session']['id'] ?? '' ) && 'parent-batch-789:2' === ( $batch_result['runs'][1]['session']['id'] ?? '' ) );
 $assert( 'batch runner reports per-task counts', ! is_wp_error( $batch_result ) && 2 === ( $batch_result['total'] ?? 0 ) && 2 === ( $batch_result['completed'] ?? 0 ) && 0 === ( $batch_result['failed'] ?? -1 ) );

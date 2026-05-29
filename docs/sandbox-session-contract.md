@@ -68,12 +68,47 @@ The ability response includes a `wp-codebox/sandbox-session/v1` envelope:
       "bundle_id": "artifact-bundle-sha256-...",
       "preview_url": "https://preview.example.test/abc"
     }
+  },
+  "agent_result": {
+    "schema": "wp-codebox/agent-result/v1",
+    "status": "completed",
+    "actionable": true,
+    "summary": "Agent sandbox produced 2 changed files and a 1842-byte patch.",
+    "changedFiles": {
+      "count": 2,
+      "paths": ["plugin.php", "tests/plugin-test.php"],
+      "artifact": "files/changed-files.json"
+    },
+    "patch": {
+      "bytes": 1842,
+      "artifact": "files/patch.diff"
+    },
+    "transcript": {
+      "artifact": "files/transcript.json",
+      "executionCount": 1
+    }
   }
 }
 ```
 
 The `status` field describes the synchronous WP Codebox call result. Durable
 queued/running/cancelled/expired transitions belong to the external orchestrator.
+
+## Agent Result Evidence
+
+Agent sandbox recipe runs also write these additive artifact files:
+
+- `files/agent-result.json` uses `wp-codebox/agent-result/v1` and summarizes
+  actionability, changed-file count, patch bytes, transcript location, failures,
+  no-op reason, and workspace-tool diagnostics.
+- `files/transcript.json` uses `wp-codebox/agent-transcript/v1` and captures the
+  bounded stdout/stderr plus parsed JSON for each `wp-codebox.agent-sandbox-run`
+  workflow step.
+
+The recipe-run JSON exposes the same compact `agentResult` object, and the host
+WordPress ability mirrors it as `agent_result`. Empty patches and empty
+`changed-files.json` are explicit non-actionable no-op results even when the
+process exits successfully.
 
 ## External Orchestrator Responsibilities
 
