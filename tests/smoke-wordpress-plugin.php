@@ -458,6 +458,40 @@ $browser_session = call_user_func(
 				'content' => '<main>Preview</main>',
 				'kind'    => 'static-html',
 			),
+			array(
+				'path'    => 'static-site/assets/app.css',
+				'content' => 'body { color: #111; }',
+				'kind'    => 'stylesheet',
+			),
+			array(
+				'path'    => 'static-site/assets/app.js',
+				'content' => 'console.log( "preview" );',
+				'kind'    => 'script',
+			),
+			array(
+				'path'           => 'static-site/assets/photo.png',
+				'content_base64' => base64_encode( "\x89PNG\r\n\x1a\nfixture" ),
+				'encoding'       => 'base64',
+				'kind'           => 'image',
+			),
+			array(
+				'path'           => 'static-site/assets/photo.jpg',
+				'content_base64' => base64_encode( "\xff\xd8fixture\xff\xd9" ),
+				'encoding'       => 'base64',
+				'kind'           => 'image',
+			),
+			array(
+				'path'           => 'static-site/assets/hero.webp',
+				'content_base64' => base64_encode( 'RIFFfixtureWEBP' ),
+				'encoding'       => 'base64',
+				'kind'           => 'image',
+			),
+			array(
+				'path'      => 'static-site/assets/icon.svg',
+				'content'   => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>',
+				'mime_type' => 'image/svg+xml',
+				'kind'      => 'image',
+			),
 		),
 	)
 );
@@ -491,6 +525,9 @@ $assert( 'browser Playground session exposes runtime dependency readiness metada
 $assert( 'browser Playground session preserves safe artifact files', ! is_wp_error( $browser_session ) && 'static-site/index.html' === ( $browser_session['artifacts']['files'][0]['path'] ?? '' ) );
 $assert( 'browser Playground session exposes artifact write paths', ! is_wp_error( $browser_session ) && '/wordpress/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['files'][0]['playground_path'] ?? '' ) );
 $assert( 'browser Playground session exposes artifact URL paths', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['files'][0]['url_path'] ?? '' ) );
+$assert( 'browser Playground session preserves mixed text and binary artifact trees', ! is_wp_error( $browser_session ) && 'text/css' === ( $browser_session['artifacts']['files'][1]['mime_type'] ?? '' ) && 'text/javascript' === ( $browser_session['artifacts']['files'][2]['mime_type'] ?? '' ) && 'image/png' === ( $browser_session['artifacts']['files'][3]['mime_type'] ?? '' ) && 'image/jpeg' === ( $browser_session['artifacts']['files'][4]['mime_type'] ?? '' ) && 'image/webp' === ( $browser_session['artifacts']['files'][5]['mime_type'] ?? '' ) && 'image/svg+xml' === ( $browser_session['artifacts']['files'][6]['mime_type'] ?? '' ) );
+$assert( 'browser Playground session returns binary artifact metadata', ! is_wp_error( $browser_session ) && 'base64' === ( $browser_session['artifacts']['files'][3]['encoding'] ?? '' ) && strlen( "\x89PNG\r\n\x1a\nfixture" ) === ( $browser_session['artifacts']['files'][3]['size'] ?? 0 ) && hash( 'sha256', "\x89PNG\r\n\x1a\nfixture" ) === ( $browser_session['artifacts']['files'][3]['sha256'] ?? '' ) && isset( $browser_session['artifacts']['files'][3]['content_base64'] ) );
+$assert( 'browser Playground session keeps existing text artifact content', ! is_wp_error( $browser_session ) && 'utf-8' === ( $browser_session['artifacts']['files'][0]['encoding'] ?? '' ) && '<main>Preview</main>' === ( $browser_session['artifacts']['files'][0]['content'] ?? '' ) && hash( 'sha256', '<main>Preview</main>' ) === ( $browser_session['artifacts']['files'][0]['sha256'] ?? '' ) );
 $assert( 'browser Playground session exposes preview URL', ! is_wp_error( $browser_session ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['playground']['preview_url'] ?? '' ) && '/wp-content/uploads/wp-codebox/artifacts/static-site/index.html' === ( $browser_session['artifacts']['preview_url'] ?? '' ) );
 $assert( 'browser Playground session normalizes task input lists', ! is_wp_error( $browser_session ) && array( 'filesystem-write' ) === ( $browser_session['task_input']['allowed_tools'] ?? array() ) );
 $assert( 'browser Playground session returns canonical task input metadata', ! is_wp_error( $browser_session ) && 'wp-codebox/task-input/v1' === ( $browser_session['task_input']['schema'] ?? '' ) && 1 === ( $browser_session['task_input']['version'] ?? 0 ) );
@@ -680,6 +717,34 @@ $invalid_browser_file = call_user_func(
 	)
 );
 $assert( 'browser Playground session rejects unsafe artifact paths', is_wp_error( $invalid_browser_file ) && 'wp_codebox_browser_artifact_path_invalid' === $invalid_browser_file->get_error_code() );
+
+$browser_executable_artifact = call_user_func(
+	$browser_session_ability['execute_callback'],
+	array(
+		'goal'           => 'Prepare an executable artifact.',
+		'artifact_files' => array(
+			array(
+				'path'    => 'uploads/shell.php',
+				'content' => '<?php echo "nope";',
+			),
+		),
+	)
+);
+$assert( 'browser Playground session rejects server-side executable artifact extensions', is_wp_error( $browser_executable_artifact ) && 'wp_codebox_browser_artifact_extension_blocked' === $browser_executable_artifact->get_error_code() && 'php' === ( $browser_executable_artifact->get_error_data()['extension'] ?? '' ) );
+
+$browser_oversized_artifact = call_user_func(
+	$browser_session_ability['execute_callback'],
+	array(
+		'goal'           => 'Prepare an oversized artifact.',
+		'artifact_files' => array(
+			array(
+				'path'    => 'assets/large.txt',
+				'content' => str_repeat( 'a', 5242881 ),
+			),
+		),
+	)
+);
+$assert( 'browser Playground session rejects oversized artifact files explicitly', is_wp_error( $browser_oversized_artifact ) && 'wp_codebox_browser_artifact_file_too_large' === $browser_oversized_artifact->get_error_code() && 5242881 === ( $browser_oversized_artifact->get_error_data()['size'] ?? 0 ) && 5242880 === ( $browser_oversized_artifact->get_error_data()['max_size'] ?? 0 ) );
 
 $captured_command  = '';
 $captured_commands = array();
