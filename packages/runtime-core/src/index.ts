@@ -169,9 +169,9 @@ export const commandRegistry = [
       { name: "wait-for", description: "Navigation wait condition.", format: "domcontentloaded|load|networkidle|selector:<selector>|duration" },
       { name: "duration", description: "Extra capture duration, or wait time when wait-for=duration.", format: "duration, e.g. 2s or 500ms" },
       { name: "script", description: "Optional page-side JavaScript to evaluate after navigation and before final capture.", format: "JavaScript function body" },
-      { name: "capture", description: "Comma-separated artifacts to capture.", format: "console,errors,html,network,screenshot" },
+      { name: "capture", description: "Comma-separated artifacts to capture.", format: "console,errors,html,network,performance,memory,screenshot" },
     ],
-    outputShape: "JSON summary plus files/browser/console.jsonl, errors.jsonl, network.jsonl, snapshot.html, summary.json, and screenshot.png when captured.",
+    outputShape: "JSON summary plus files/browser/console.jsonl, errors.jsonl, network.jsonl, performance.json, memory.json, checkpoints.jsonl, snapshot.html, summary.json, and screenshot.png when captured.",
     policyRequirement: "Runtime policy commands must include wordpress.browser-probe.",
     recipe: true,
     handler: { kind: "playground", method: "runBrowserProbe" },
@@ -1454,6 +1454,9 @@ export interface ArtifactReviewBrowserSummary {
     html?: string
     network?: string
     networkEvents?: number
+    checkpoints?: string
+    memory?: string
+    performance?: string
     screenshot?: string
     console?: string
     errorsFile?: string

@@ -43,6 +43,31 @@ import type {
 } from "@chubes4/wp-codebox-core"
 import type { ConsoleMessage, Page, Request, Response } from "playwright"
 
+const BROWSER_PROBE_CAPTURE_VALUES = ["console", "errors", "html", "network", "performance", "memory", "screenshot"] as const
+const BROWSER_PROBE_PERFORMANCE_INIT_SCRIPT = `
+(() => {
+  const state = globalThis.__wpCodeboxBrowserProbe = globalThis.__wpCodeboxBrowserProbe || { longTasks: [] };
+  if (state.longTaskObserverInstalled || typeof PerformanceObserver === 'undefined') {
+    return;
+  }
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        state.longTasks.push({
+          name: entry.name,
+          startTime: entry.startTime,
+          duration: entry.duration,
+        });
+      }
+    });
+    observer.observe({ type: 'longtask', buffered: true });
+    state.longTaskObserverInstalled = true;
+  } catch {
+    state.longTaskObserverInstalled = false;
+  }
+})();
+`
+
 function now(): string {
   return new Date().toISOString()
 }
@@ -525,10 +550,13 @@ interface BrowserProbeArtifact {
   url: string
   files: {
     actions?: string
+    checkpoints?: string
     console?: string
     errors?: string
     html?: string
+    memory?: string
     network?: string
+    performance?: string
     screenshot?: string
     summary: string
   }
@@ -538,12 +566,103 @@ interface BrowserProbeArtifact {
     errors: number
     finalUrl: string
     htmlSnapshot: boolean
+    memory?: BrowserProbeMemorySummary
     networkEvents: number
+    performance?: BrowserProbePerformanceSummary
     replayability: BrowserProbeReplayability
     screenshot: boolean
     scriptResult?: unknown
     viewport: BrowserProbeViewport | null
   }
+}
+
+interface BrowserProbeMetricDigest {
+  final: number | null
+  peak: number | null
+}
+
+interface BrowserProbeMemorySummary {
+  usedJSHeapSize: BrowserProbeMetricDigest
+  totalJSHeapSize: BrowserProbeMetricDigest
+  jsHeapSizeLimit: number | null
+  domNodes: BrowserProbeMetricDigest
+  documents: BrowserProbeMetricDigest
+  jsEventListeners: BrowserProbeMetricDigest
+}
+
+interface BrowserProbePerformanceSummary {
+  resources: number
+  transferSizeBytes: number
+  encodedBodySizeBytes: number
+  decodedBodySizeBytes: number
+  longTasks: number
+  longTaskDurationMs: number
+  domNodes: BrowserProbeMetricDigest
+  cdpMetrics: Record<string, BrowserProbeMetricDigest>
+}
+
+interface BrowserProbeCheckpointRecord {
+  schema: "wp-codebox/browser-checkpoint/v1"
+  name: string
+  timestamp: string
+  metrics: BrowserProbeMetricsSnapshot
+}
+
+interface BrowserProbeMetricsSnapshot {
+  timestamp: string
+  memory: {
+    performanceMemory: {
+      usedJSHeapSize: number | null
+      totalJSHeapSize: number | null
+      jsHeapSizeLimit: number | null
+    }
+    cdpHeap: {
+      usedSize: number | null
+      totalSize: number | null
+    }
+    domCounters: {
+      documents: number | null
+      nodes: number | null
+      jsEventListeners: number | null
+    }
+  }
+  performance: {
+    cdpMetrics: Record<string, number>
+    dom: {
+      nodes: number
+      documents: number
+      iframes: number
+    }
+    resources: {
+      count: number
+      transferSizeBytes: number
+      encodedBodySizeBytes: number
+      decodedBodySizeBytes: number
+    }
+    longTasks: {
+      count: number
+      totalDurationMs: number
+      maxDurationMs: number
+    }
+  }
+}
+
+interface BrowserProbeMemoryArtifact {
+  schema: "wp-codebox/browser-memory/v1"
+  version: 1
+  capturedAt: string
+  final: BrowserProbeMetricsSnapshot["memory"]
+  peak: BrowserProbeMemorySummary
+  checkpoints: BrowserProbeCheckpointRecord[]
+}
+
+interface BrowserProbePerformanceArtifact {
+  schema: "wp-codebox/browser-performance/v1"
+  version: 1
+  capturedAt: string
+  final: BrowserProbeMetricsSnapshot["performance"]
+  peak: BrowserProbePerformanceSummary
+  checkpoints: BrowserProbeCheckpointRecord[]
 }
 
 interface BrowserProbeViewport {
@@ -1205,14 +1324,15 @@ class PlaygroundRuntime implements Runtime {
     }
 
     for (const item of capture) {
-      if (!["console", "errors", "html", "network", "screenshot"].includes(item)) {
-        throw new Error(`wordpress.browser-probe capture supports console, errors, html, network, screenshot: ${item}`)
+      if (!(BROWSER_PROBE_CAPTURE_VALUES as readonly string[]).includes(item)) {
+        throw new Error(`wordpress.browser-probe capture supports ${BROWSER_PROBE_CAPTURE_VALUES.join(", ")}: ${item}`)
       }
     }
 
     const waitFor = argValue(args, "wait-for")?.trim() || "domcontentloaded"
     const durationMs = durationArg(args, "duration", 0)
     const script = argValue(args, "script")
+    const capturesBrowserMetrics = capture.has("performance") || capture.has("memory")
     const targetUrl = resolveBrowserProbeUrl(urlArg, server.serverUrl)
     const browserDirectory = join(this.artifactRoot, "files", "browser")
     await mkdir(browserDirectory, { recursive: true })
@@ -1220,10 +1340,14 @@ class PlaygroundRuntime implements Runtime {
     const consoleMessages: Record<string, unknown>[] = []
     const errors: BrowserProbeErrorRecord[] = []
     const network: BrowserProbeNetworkRecord[] = []
+    const checkpoints: BrowserProbeCheckpointRecord[] = []
     const consolePath = join(browserDirectory, "console.jsonl")
+    const checkpointsPath = join(browserDirectory, "checkpoints.jsonl")
     const errorsPath = join(browserDirectory, "errors.jsonl")
     const htmlPath = join(browserDirectory, "snapshot.html")
+    const memoryPath = join(browserDirectory, "memory.json")
     const networkPath = join(browserDirectory, "network.jsonl")
+    const performancePath = join(browserDirectory, "performance.json")
     const screenshotPath = join(browserDirectory, "screenshot.png")
     const summaryPath = join(browserDirectory, "summary.json")
     const startedAt = now()
@@ -1234,9 +1358,14 @@ class PlaygroundRuntime implements Runtime {
     let screenshotSha256: string | undefined
     let viewport: BrowserProbeViewport | null = null
     let scriptResult: unknown
+    let memoryArtifact: BrowserProbeMemoryArtifact | undefined
+    let performanceArtifact: BrowserProbePerformanceArtifact | undefined
 
     try {
       const page = await browser.newPage()
+      if (capturesBrowserMetrics) {
+        await page.addInitScript(BROWSER_PROBE_PERFORMANCE_INIT_SCRIPT)
+      }
       viewport = await browserProbeViewport(page)
       if (capture.has("console")) {
         page.on("console", (message) => consoleMessages.push(serializeBrowserConsoleMessage(message)))
@@ -1250,16 +1379,35 @@ class PlaygroundRuntime implements Runtime {
       }
 
       await navigateBrowserProbe(page, targetUrl, waitFor, durationMs)
+      if (capturesBrowserMetrics) {
+        checkpoints.push(await browserProbeCheckpoint(page, "after-navigation"))
+      }
       if (script) {
         scriptResult = await page.evaluate(async (source) => {
           const run = new Function(`return (async () => {\n${source}\n})()`)
           return run()
         }, script)
+        if (capturesBrowserMetrics) {
+          checkpoints.push(await browserProbeCheckpoint(page, "after-script"))
+        }
       }
       if (durationMs > 0 && waitFor !== "duration") {
         await page.waitForTimeout(durationMs)
+        if (capturesBrowserMetrics) {
+          checkpoints.push(await browserProbeCheckpoint(page, "after-duration"))
+        }
       }
       finalUrl = page.url()
+
+      if (capturesBrowserMetrics) {
+        checkpoints.push(await browserProbeCheckpoint(page, "final"))
+        if (capture.has("memory")) {
+          memoryArtifact = browserProbeMemoryArtifact(checkpoints)
+        }
+        if (capture.has("performance")) {
+          performanceArtifact = browserProbePerformanceArtifact(checkpoints)
+        }
+      }
 
       if (capture.has("html")) {
         const html = await page.content()
@@ -1285,15 +1433,27 @@ class PlaygroundRuntime implements Runtime {
       if (capture.has("network")) {
         await writeFile(networkPath, jsonLines(network))
       }
+      if (checkpoints.length > 0) {
+        await writeFile(checkpointsPath, jsonLines(checkpoints))
+      }
+      if (memoryArtifact) {
+        await writeFile(memoryPath, `${JSON.stringify(memoryArtifact, null, 2)}\n`)
+      }
+      if (performanceArtifact) {
+        await writeFile(performancePath, `${JSON.stringify(performanceArtifact, null, 2)}\n`)
+      }
 
       const artifact: BrowserProbeArtifact = {
         requestedUrl: targetUrl,
         url: targetUrl,
         files: {
           ...(capture.has("console") ? { console: "files/browser/console.jsonl" } : {}),
+          ...(checkpoints.length > 0 ? { checkpoints: "files/browser/checkpoints.jsonl" } : {}),
           ...(capture.has("errors") ? { errors: "files/browser/errors.jsonl" } : {}),
           ...(capture.has("html") ? { html: "files/browser/snapshot.html" } : {}),
+          ...(memoryArtifact ? { memory: "files/browser/memory.json" } : {}),
           ...(capture.has("network") ? { network: "files/browser/network.jsonl" } : {}),
+          ...(performanceArtifact ? { performance: "files/browser/performance.json" } : {}),
           ...(capture.has("screenshot") ? { screenshot: "files/browser/screenshot.png" } : {}),
           summary: "files/browser/summary.json",
         },
@@ -1302,7 +1462,9 @@ class PlaygroundRuntime implements Runtime {
           errors: errors.length,
           finalUrl,
           htmlSnapshot: capture.has("html"),
+          ...(memoryArtifact ? { memory: memoryArtifact.peak } : {}),
           networkEvents: network.length,
+          ...(performanceArtifact ? { performance: performanceArtifact.peak } : {}),
           replayability: browserProbeReplayability(capture),
           screenshot: capture.has("screenshot"),
           ...(typeof scriptResult !== "undefined" ? { scriptResult } : {}),
@@ -2413,9 +2575,12 @@ echo wp_json_encode( array(
         networkEvents: probe.summary.networkEvents,
         screenshot: probe.files.screenshot,
         console: probe.files.console,
+        checkpoints: probe.files.checkpoints,
         errorsFile: probe.files.errors,
+        memory: probe.files.memory,
         actions: probe.files.actions,
         actionCount: probe.summary.actions,
+        performance: probe.files.performance,
         summaryFile: probe.files.summary,
       })),
     }
@@ -2434,14 +2599,23 @@ echo wp_json_encode( array(
       if (probe.files.console) {
         files.set(probe.files.console, { kind: "browser-console", contentType: "application/x-ndjson" })
       }
+      if (probe.files.checkpoints) {
+        files.set(probe.files.checkpoints, { kind: "browser-checkpoints", contentType: "application/x-ndjson" })
+      }
       if (probe.files.errors) {
         files.set(probe.files.errors, { kind: "browser-errors", contentType: "application/x-ndjson" })
       }
       if (probe.files.html) {
         files.set(probe.files.html, { kind: "browser-html-snapshot", contentType: "text/html; charset=utf-8" })
       }
+      if (probe.files.memory) {
+        files.set(probe.files.memory, { kind: "browser-memory", contentType: "application/json" })
+      }
       if (probe.files.network) {
         files.set(probe.files.network, { kind: "browser-network", contentType: "application/x-ndjson" })
+      }
+      if (probe.files.performance) {
+        files.set(probe.files.performance, { kind: "browser-performance", contentType: "application/json" })
       }
       if (probe.files.screenshot) {
         files.set(probe.files.screenshot, { kind: "browser-screenshot", contentType: "image/png" })
@@ -2469,7 +2643,7 @@ echo wp_json_encode( array(
 
   private async redactBrowserArtifacts(redactor: ArtifactRedactor): Promise<void> {
     for (const probe of this.browserProbes) {
-      for (const path of [probe.files.actions, probe.files.console, probe.files.errors, probe.files.html, probe.files.network, probe.files.summary]) {
+      for (const path of [probe.files.actions, probe.files.checkpoints, probe.files.console, probe.files.errors, probe.files.html, probe.files.memory, probe.files.network, probe.files.performance, probe.files.summary]) {
         if (!path) {
           continue
         }
@@ -2753,6 +2927,237 @@ function browserProbeReplayability(capture: Set<string>): BrowserProbeReplayabil
   }
 
   return "diagnostic-only"
+}
+
+async function browserProbeCheckpoint(page: Page, name: string): Promise<BrowserProbeCheckpointRecord> {
+  return {
+    schema: "wp-codebox/browser-checkpoint/v1",
+    name,
+    timestamp: now(),
+    metrics: await browserProbeMetricsSnapshot(page),
+  }
+}
+
+async function browserProbeMetricsSnapshot(page: Page): Promise<BrowserProbeMetricsSnapshot> {
+  const [pageMetrics, cdpMetrics] = await Promise.all([
+    page.evaluate(() => {
+      const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number; totalJSHeapSize?: number; jsHeapSizeLimit?: number } }).memory
+      const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[]
+      const longTasks = ((globalThis as typeof globalThis & { __wpCodeboxBrowserProbe?: { longTasks?: Array<{ duration?: number }> } }).__wpCodeboxBrowserProbe?.longTasks ?? [])
+        .map((entry) => Number(entry.duration ?? 0))
+        .filter((duration) => Number.isFinite(duration) && duration >= 0)
+
+      return {
+        performanceMemory: {
+          usedJSHeapSize: finiteNumberOrNull(memory?.usedJSHeapSize),
+          totalJSHeapSize: finiteNumberOrNull(memory?.totalJSHeapSize),
+          jsHeapSizeLimit: finiteNumberOrNull(memory?.jsHeapSizeLimit),
+        },
+        dom: {
+          nodes: document.querySelectorAll("*").length,
+          documents: 1,
+          iframes: document.querySelectorAll("iframe").length,
+        },
+        resources: {
+          count: resources.length,
+          transferSizeBytes: resourceTotal(resources, "transferSize"),
+          encodedBodySizeBytes: resourceTotal(resources, "encodedBodySize"),
+          decodedBodySizeBytes: resourceTotal(resources, "decodedBodySize"),
+        },
+        longTasks: {
+          count: longTasks.length,
+          totalDurationMs: longTasks.reduce((total, duration) => total + duration, 0),
+          maxDurationMs: longTasks.reduce((max, duration) => Math.max(max, duration), 0),
+        },
+      }
+
+      function finiteNumberOrNull(value: unknown): number | null {
+        return typeof value === "number" && Number.isFinite(value) ? value : null
+      }
+
+      function resourceTotal(resources: PerformanceResourceTiming[], field: "transferSize" | "encodedBodySize" | "decodedBodySize"): number {
+        return resources.reduce((total, resource) => {
+          const value = resource[field]
+          return total + (Number.isFinite(value) && value > 0 ? value : 0)
+        }, 0)
+      }
+    }),
+    browserProbeCdpMetrics(page),
+  ])
+
+  return {
+    timestamp: now(),
+    memory: {
+      performanceMemory: pageMetrics.performanceMemory,
+      cdpHeap: cdpMetrics.heap,
+      domCounters: cdpMetrics.domCounters,
+    },
+    performance: {
+      cdpMetrics: cdpMetrics.performance,
+      dom: {
+        nodes: cdpMetrics.domCounters.nodes ?? pageMetrics.dom.nodes,
+        documents: cdpMetrics.domCounters.documents ?? pageMetrics.dom.documents,
+        iframes: pageMetrics.dom.iframes,
+      },
+      resources: pageMetrics.resources,
+      longTasks: pageMetrics.longTasks,
+    },
+  }
+}
+
+async function browserProbeCdpMetrics(page: Page): Promise<{
+  performance: Record<string, number>
+  domCounters: { documents: number | null; nodes: number | null; jsEventListeners: number | null }
+  heap: { usedSize: number | null; totalSize: number | null }
+}> {
+  const fallback = {
+    performance: {},
+    domCounters: { documents: null, nodes: null, jsEventListeners: null },
+    heap: { usedSize: null, totalSize: null },
+  }
+
+  try {
+    const session = await page.context().newCDPSession(page)
+    try {
+      await session.send("Performance.enable").catch(() => undefined)
+      const [performanceResult, domCountersResult, heapResult] = await Promise.all([
+        session.send("Performance.getMetrics").catch(() => undefined),
+        session.send("Memory.getDOMCounters").catch(() => undefined),
+        session.send("Runtime.getHeapUsage").catch(() => undefined),
+      ])
+      return {
+        performance: cdpPerformanceMetrics(performanceResult),
+        domCounters: cdpDomCounters(domCountersResult),
+        heap: cdpHeapUsage(heapResult),
+      }
+    } finally {
+      await session.detach().catch(() => undefined)
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function browserProbeMemoryArtifact(checkpoints: BrowserProbeCheckpointRecord[]): BrowserProbeMemoryArtifact {
+  const final = checkpoints.at(-1)?.metrics.memory ?? {
+    performanceMemory: { usedJSHeapSize: null, totalJSHeapSize: null, jsHeapSizeLimit: null },
+    cdpHeap: { usedSize: null, totalSize: null },
+    domCounters: { documents: null, nodes: null, jsEventListeners: null },
+  }
+
+  return {
+    schema: "wp-codebox/browser-memory/v1",
+    version: 1,
+    capturedAt: now(),
+    final,
+    peak: browserProbeMemorySummary(checkpoints),
+    checkpoints,
+  }
+}
+
+function browserProbePerformanceArtifact(checkpoints: BrowserProbeCheckpointRecord[]): BrowserProbePerformanceArtifact {
+  const final = checkpoints.at(-1)?.metrics.performance ?? {
+    cdpMetrics: {},
+    dom: { nodes: 0, documents: 0, iframes: 0 },
+    resources: { count: 0, transferSizeBytes: 0, encodedBodySizeBytes: 0, decodedBodySizeBytes: 0 },
+    longTasks: { count: 0, totalDurationMs: 0, maxDurationMs: 0 },
+  }
+
+  return {
+    schema: "wp-codebox/browser-performance/v1",
+    version: 1,
+    capturedAt: now(),
+    final,
+    peak: browserProbePerformanceSummary(checkpoints),
+    checkpoints,
+  }
+}
+
+function browserProbeMemorySummary(checkpoints: BrowserProbeCheckpointRecord[]): BrowserProbeMemorySummary {
+  return {
+    usedJSHeapSize: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.memory.performanceMemory.usedJSHeapSize ?? checkpoint.metrics.memory.cdpHeap.usedSize)),
+    totalJSHeapSize: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.memory.performanceMemory.totalJSHeapSize ?? checkpoint.metrics.memory.cdpHeap.totalSize)),
+    jsHeapSizeLimit: lastNumber(checkpoints.map((checkpoint) => checkpoint.metrics.memory.performanceMemory.jsHeapSizeLimit)),
+    domNodes: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.memory.domCounters.nodes ?? checkpoint.metrics.performance.dom.nodes)),
+    documents: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.memory.domCounters.documents ?? checkpoint.metrics.performance.dom.documents)),
+    jsEventListeners: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.memory.domCounters.jsEventListeners)),
+  }
+}
+
+function browserProbePerformanceSummary(checkpoints: BrowserProbeCheckpointRecord[]): BrowserProbePerformanceSummary {
+  const final = checkpoints.at(-1)?.metrics.performance
+  const metricNames = new Set<string>()
+  for (const checkpoint of checkpoints) {
+    for (const key of Object.keys(checkpoint.metrics.performance.cdpMetrics)) {
+      metricNames.add(key)
+    }
+  }
+
+  return {
+    resources: final?.resources.count ?? 0,
+    transferSizeBytes: final?.resources.transferSizeBytes ?? 0,
+    encodedBodySizeBytes: final?.resources.encodedBodySizeBytes ?? 0,
+    decodedBodySizeBytes: final?.resources.decodedBodySizeBytes ?? 0,
+    longTasks: final?.longTasks.count ?? 0,
+    longTaskDurationMs: final?.longTasks.totalDurationMs ?? 0,
+    domNodes: metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.performance.dom.nodes)),
+    cdpMetrics: Object.fromEntries([...metricNames].sort().map((name) => [name, metricDigest(checkpoints.map((checkpoint) => checkpoint.metrics.performance.cdpMetrics[name]))])),
+  }
+}
+
+function cdpPerformanceMetrics(value: unknown): Record<string, number> {
+  if (!isRecord(value) || !Array.isArray(value.metrics)) {
+    return {}
+  }
+
+  return Object.fromEntries(value.metrics.flatMap((metric) => {
+    if (!isRecord(metric) || typeof metric.name !== "string" || typeof metric.value !== "number" || !Number.isFinite(metric.value)) {
+      return []
+    }
+    return [[metric.name, metric.value]]
+  }))
+}
+
+function cdpDomCounters(value: unknown): { documents: number | null; nodes: number | null; jsEventListeners: number | null } {
+  return {
+    documents: recordNumberOrNull(value, "documents"),
+    nodes: recordNumberOrNull(value, "nodes"),
+    jsEventListeners: recordNumberOrNull(value, "jsEventListeners"),
+  }
+}
+
+function cdpHeapUsage(value: unknown): { usedSize: number | null; totalSize: number | null } {
+  return {
+    usedSize: recordNumberOrNull(value, "usedSize"),
+    totalSize: recordNumberOrNull(value, "totalSize"),
+  }
+}
+
+function recordNumberOrNull(value: unknown, key: string): number | null {
+  if (!isRecord(value)) {
+    return null
+  }
+  const field = value[key]
+  return typeof field === "number" && Number.isFinite(field) ? field : null
+}
+
+function metricDigest(values: Array<number | null | undefined>): BrowserProbeMetricDigest {
+  const numbers = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+  return {
+    final: numbers.at(-1) ?? null,
+    peak: numbers.length > 0 ? Math.max(...numbers) : null,
+  }
+}
+
+function lastNumber(values: Array<number | null | undefined>): number | null {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index]
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value
+    }
+  }
+
+  return null
 }
 
 function serializeBrowserResponse(response: Response): BrowserProbeNetworkRecord {

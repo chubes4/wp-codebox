@@ -3629,7 +3629,7 @@ async function validateRecipeStepArgs(step: WorkspaceRecipe["workflow"]["steps"]
     const capture = recipeStepArgValue(step.args ?? [], "capture")
     if (capture) {
       for (const item of capture.split(",").map((value) => value.trim()).filter(Boolean)) {
-        if (!["console", "errors", "html", "network", "screenshot"].includes(item)) {
+        if (!["console", "errors", "html", "network", "performance", "memory", "screenshot"].includes(item)) {
           addIssue("invalid-capture", `${path}.args`, `wordpress.browser-probe capture does not support: ${item}`)
         }
       }
