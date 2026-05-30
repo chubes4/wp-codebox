@@ -189,6 +189,66 @@ The seed step is intentionally small. If you need additional bbPress shape
 varying content shapes), edit `bbpress-reply-editor-seed.php` to add them
 before the JSON output line, or fork the recipe entirely.
 
+### `browser-actions-demo.json`
+
+The reference example for the **`wordpress.browser-actions` interaction probe**
+(shipped in wp-codebox #311). Where the other cookbook recipes seed a host shape
+and pair with `--preview-hold` for *manual* clicking, this recipe *drives* a
+real React component with an ordered interaction script and asserts that it
+still **works** — not just that the page renders.
+
+It boots WordPress **trunk** (so the editor stack runs on **React 19**), mounts
+a tiny vendor-neutral demo plugin (`browser-actions-demo-plugin/`) that renders
+a real `@wordpress/element` widget — a click counter and a bound range slider —
+into a Tools admin page, then drives it:
+
+- clicks the **Increment** button three times and asserts the counter advanced
+  to `3` and a "threshold reached" message appeared;
+- moves the **slider** to `80` and asserts the bound output value updated.
+
+```bash
+npm run wp-codebox -- recipe-run \
+  --recipe ./examples/recipes/cookbook/browser-actions-demo.json \
+  --json
+```
+
+The demo plugin uses `@wordpress/element` (the React WordPress already ships) so
+the fixture needs **no build step** — the recipe mounts the plugin directory
+as-is.
+
+The recipe's `wordpress.browser-actions` step records its evidence under
+`artifacts/<runtime>/files/browser/`:
+
+- `steps.jsonl` — per-step index/kind/selector/timing/ok-fail
+- `action-summary.json` — the machine-readable `assertions` block
+  (`total`/`passed`/`failed`) plus each `expect`/`evaluate` result
+- `screenshot-*.png` — named captures: `demo-loaded`, `after-increment`,
+  `after-slider`
+
+A green run reports **6/6 assertions passed, 0 failed, 0 page errors**.
+
+#### Why this exists
+
+A render-only smoke test ("the component mounts") would not catch a regression
+where a component renders but its interaction is dead — the exact failure mode
+that bites when a third-party React widget breaks on a major React bump (React
+18 → 19 changed effect timing, `ref` semantics, and Strict Mode
+double-invocation). The interaction probe drives the real component and asserts
+behavior, which is the difference between "it renders" and "it works."
+
+#### Adapting it to your plugin
+
+Swap `inputs.mounts[0].source` to your plugin and rewrite the `steps-json` to
+drive your own UI: `click`/`hover`/`fill`/`type`/`select`/`drag` to interact,
+`expect`/`evaluate` to assert state, and `screenshot` to capture named frames.
+Keep `steps-json` inline (not `@file`) if it contains an `evaluate` step so the
+recipe auto-grants the `wordpress.browser-actions.evaluate` policy capability.
+
+A worked, plugin-specific consumer of this capability — driving the
+[data-machine-socials](https://github.com/Extra-Chill/data-machine-socials)
+`react-easy-crop` modal under React 19 — lives in that plugin's own repository,
+where the recipe sits next to the code it guards.
+
 ### `woocommerce-store.json`
 
 Boots a Playground with WooCommerce installed from `wordpress.org/plugins`,

@@ -1,0 +1,63 @@
+{
+  "schema": "wp-codebox/workspace-recipe/v1",
+  "runtime": {
+    "backend": "wordpress-playground",
+    "name": "browser-actions-demo-lab",
+    "wp": "trunk",
+    "blueprint": {
+      "steps": [
+        {
+          "step": "installTheme",
+          "themeData": {
+            "resource": "wordpress.org/themes",
+            "slug": "twentytwentyfive"
+          },
+          "options": {
+            "activate": true
+          }
+        },
+        {
+          "step": "login",
+          "username": "admin",
+          "password": "password"
+        }
+      ]
+    }
+  },
+  "inputs": {
+    "mounts": [
+      {
+        "source": "./browser-actions-demo-plugin",
+        "target": "/wordpress/wp-content/plugins/browser-actions-demo",
+        "mode": "readonly",
+        "metadata": {
+          "kind": "component",
+          "slug": "browser-actions-demo",
+          "editable": false
+        }
+      }
+    ]
+  },
+  "workflow": {
+    "steps": [
+      {
+        "command": "wordpress.run-php",
+        "args": [
+          "code-file=./examples/recipes/cookbook/browser-actions-demo-seed.php"
+        ]
+      },
+      {
+        "command": "wordpress.browser-actions",
+        "args": [
+          "step-timeout=30s",
+          "timeout=120s",
+          "capture=steps,console,errors,network,html,screenshot",
+          "steps-json=[{\"kind\":\"navigate\",\"url\":\"/wp-admin/tools.php?page=wp-codebox-browser-actions-demo\",\"waitFor\":\"load\"},{\"kind\":\"waitFor\",\"selector\":\".wpcb-increment\"},{\"kind\":\"screenshot\",\"name\":\"demo-loaded\"},{\"kind\":\"expect\",\"selector\":\".wpcb-count[data-count=\\\"0\\\"]\",\"state\":\"visible\"},{\"kind\":\"click\",\"selector\":\".wpcb-increment\"},{\"kind\":\"click\",\"selector\":\".wpcb-increment\"},{\"kind\":\"click\",\"selector\":\".wpcb-increment\"},{\"kind\":\"expect\",\"selector\":\".wpcb-count[data-count=\\\"3\\\"]\",\"state\":\"visible\"},{\"kind\":\"expect\",\"selector\":\".wpcb-threshold\",\"state\":\"visible\"},{\"kind\":\"evaluate\",\"expression\":\"document.querySelector('.wpcb-count').getAttribute('data-count')\",\"assert\":\"3\"},{\"kind\":\"screenshot\",\"name\":\"after-increment\"},{\"kind\":\"fill\",\"selector\":\".wpcb-slider\",\"value\":\"80\"},{\"kind\":\"expect\",\"selector\":\".wpcb-slider-value[data-value=\\\"80\\\"]\",\"state\":\"visible\"},{\"kind\":\"evaluate\",\"expression\":\"document.querySelector('.wpcb-slider-value').getAttribute('data-value')\",\"assert\":\"80\"},{\"kind\":\"screenshot\",\"name\":\"after-slider\"}]"
+        ]
+      }
+    ]
+  },
+  "artifacts": {
+    "directory": "./artifacts"
+  }
+}
