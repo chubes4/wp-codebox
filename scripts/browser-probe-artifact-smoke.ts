@@ -99,6 +99,24 @@ assert.match(networkLog, /"type":"response"/)
 assert.match(checkpointsLog, /"schema":"wp-codebox\/browser-checkpoint\/v1"/)
 assert.match(checkpointsLog, /"name":"fixture-before-return"/)
 
+const networkEvents = networkLog.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) as Array<{
+  type: string
+  timing?: { startTime?: number }
+  sizes?: { responseBodySize?: number; responseHeadersSize?: number }
+  transferSize?: number
+  bodySize?: number
+  responseBodySize?: number
+}>
+const responseEvent = networkEvents.find((event) => event.type === "response")
+assert.ok(responseEvent, "network log should include a response event")
+assert.equal(typeof responseEvent.timing?.startTime, "number", "network response should include Playwright request timing")
+assert.equal(typeof responseEvent.sizes?.responseHeadersSize, "number", "network response should include Playwright response header size")
+assert.equal(typeof responseEvent.sizes?.responseBodySize, "number", "network response should include Playwright response body size")
+assert.equal(typeof responseEvent.transferSize, "number", "network response should include generic transfer size")
+assert.equal(typeof responseEvent.bodySize, "number", "network response should include generic body size")
+assert.equal(typeof responseEvent.responseBodySize, "number", "network response should include direct response body size")
+assert.equal(responseEvent.bodySize, responseEvent.responseBodySize, "generic body size should mirror response body size")
+
 const memory = JSON.parse(await readFile(memoryPath, "utf8")) as { schema: string; final: { domCounters: { nodes: number | null } }; peak: { domNodes: { final: number | null; peak: number | null } }; checkpoints: unknown[] }
 const performance = JSON.parse(await readFile(performancePath, "utf8")) as { schema: string; final: { resources: { count: number }; dom: { nodes: number } }; peak: { resources: number; domNodes: { final: number | null; peak: number | null } }; checkpoints: unknown[] }
 assert.equal(memory.schema, "wp-codebox/browser-memory/v1")

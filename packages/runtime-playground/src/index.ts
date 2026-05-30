@@ -802,7 +802,20 @@ interface BrowserProbeNetworkRecord {
   statusText?: string
   ok?: boolean
   contentType?: string | null
+  timing?: Record<string, number>
+  sizes?: BrowserProbeNetworkSizes
+  transferSize?: number
+  bodySize?: number
+  requestBodySize?: number
+  responseBodySize?: number
   failure?: ReturnType<Request["failure"]>
+}
+
+interface BrowserProbeNetworkSizes {
+  requestBodySize: number
+  requestHeadersSize: number
+  responseBodySize: number
+  responseHeadersSize: number
 }
 
 interface ThemeCheckArtifact {
@@ -1385,6 +1398,7 @@ class PlaygroundRuntime implements Runtime {
     const consoleMessages: Record<string, unknown>[] = []
     const errors: BrowserProbeErrorRecord[] = []
     const network: BrowserProbeNetworkRecord[] = []
+    const networkTasks: Array<Promise<void>> = []
     const checkpoints: BrowserProbeCheckpointRecord[] = []
     const consolePath = join(browserDirectory, "console.jsonl")
     const checkpointsPath = join(browserDirectory, "checkpoints.jsonl")
@@ -1420,7 +1434,12 @@ class PlaygroundRuntime implements Runtime {
         page.on("pageerror", (error) => errors.push(serializeBrowserError("pageerror", error)))
       }
       if (capture.has("network")) {
-        page.on("response", (response) => network.push(serializeBrowserResponse(response)))
+        page.on("requestfinished", (request) => {
+          const task = serializeBrowserFinishedRequest(request).then((record) => {
+            network.push(record)
+          }).catch(() => undefined)
+          networkTasks.push(task)
+        })
         page.on("requestfailed", (request) => network.push(serializeBrowserRequestFailure(request)))
       }
 
@@ -1471,6 +1490,9 @@ class PlaygroundRuntime implements Runtime {
           await page.screenshot({ path: screenshotPath, fullPage: true })
           screenshotSha256 = await fileSha256(screenshotPath)
         }
+      }
+      if (networkTasks.length > 0) {
+        await Promise.all(networkTasks)
       }
       await browser.close()
       if (capture.has("console")) {
@@ -1601,6 +1623,7 @@ class PlaygroundRuntime implements Runtime {
     const consoleMessages: Record<string, unknown>[] = []
     const errors: BrowserProbeErrorRecord[] = []
     const network: BrowserProbeNetworkRecord[] = []
+    const networkTasks: Array<Promise<void>> = []
     const stepsPath = join(browserDirectory, "steps.jsonl")
     const consolePath = join(browserDirectory, "console.jsonl")
     const errorsPath = join(browserDirectory, "errors.jsonl")
@@ -1629,7 +1652,12 @@ class PlaygroundRuntime implements Runtime {
         page.on("pageerror", (error) => errors.push(serializeBrowserError("pageerror", error)))
       }
       if (capture.has("network")) {
-        page.on("response", (response) => network.push(serializeBrowserResponse(response)))
+        page.on("requestfinished", (request) => {
+          const task = serializeBrowserFinishedRequest(request).then((record) => {
+            network.push(record)
+          }).catch(() => undefined)
+          networkTasks.push(task)
+        })
         page.on("requestfailed", (request) => network.push(serializeBrowserRequestFailure(request)))
       }
 
@@ -1680,6 +1708,9 @@ class PlaygroundRuntime implements Runtime {
         screenshotSha256 = await fileSha256(screenshotPath)
       }
     } finally {
+      if (networkTasks.length > 0) {
+        await Promise.all(networkTasks)
+      }
       await browser.close()
       if (capture.has("steps")) {
         await writeFile(stepsPath, jsonLines(stepRecords))
@@ -3596,8 +3627,26 @@ function sumMetric(metricSets: Array<Record<string, number>>, name: string): num
   return metricSets.reduce((total, metrics) => total + (metrics[name] ?? 0), 0)
 }
 
-function serializeBrowserResponse(response: Response): BrowserProbeNetworkRecord {
+async function serializeBrowserFinishedRequest(request: Request): Promise<BrowserProbeNetworkRecord> {
+  const response = await request.response()
+  if (!response) {
+    return {
+      type: "response",
+      url: request.url(),
+      method: request.method(),
+      resourceType: request.resourceType(),
+      timestamp: now(),
+      timing: browserRequestTiming(request),
+    }
+  }
+
+  return serializeBrowserResponse(response)
+}
+
+async function serializeBrowserResponse(response: Response): Promise<BrowserProbeNetworkRecord> {
   const request = response.request()
+  const sizes = await browserRequestSizes(request)
+  const transferSize = sizes ? sizes.responseHeadersSize + sizes.responseBodySize : undefined
   return {
     type: "response",
     url: response.url(),
@@ -3607,6 +3656,12 @@ function serializeBrowserResponse(response: Response): BrowserProbeNetworkRecord
     statusText: response.statusText(),
     ok: response.ok(),
     contentType: response.headers()["content-type"] ?? null,
+    timing: browserRequestTiming(request),
+    ...(sizes ? { sizes } : {}),
+    ...(typeof transferSize === "number" ? { transferSize } : {}),
+    ...(sizes ? { bodySize: sizes.responseBodySize } : {}),
+    ...(sizes ? { requestBodySize: sizes.requestBodySize } : {}),
+    ...(sizes ? { responseBodySize: sizes.responseBodySize } : {}),
     timestamp: now(),
   }
 }
@@ -3617,8 +3672,28 @@ function serializeBrowserRequestFailure(request: Request): BrowserProbeNetworkRe
     url: request.url(),
     method: request.method(),
     resourceType: request.resourceType(),
+    timing: browserRequestTiming(request),
     failure: request.failure(),
     timestamp: now(),
+  }
+}
+
+function browserRequestTiming(request: Request): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(request.timing()).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])),
+  )
+}
+
+async function browserRequestSizes(request: Request): Promise<BrowserProbeNetworkSizes | undefined> {
+  const maybeSizedRequest = request as Request & { sizes?: () => Promise<BrowserProbeNetworkSizes> }
+  if (typeof maybeSizedRequest.sizes !== "function") {
+    return undefined
+  }
+
+  try {
+    return await maybeSizedRequest.sizes()
+  } catch {
+    return undefined
   }
 }
 
