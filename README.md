@@ -635,7 +635,7 @@ npm run wp-codebox -- recipe-run \
   --json
 ```
 
-Each workload file returns a callable. The callable may return numeric metrics directly or a payload with `metrics` and `metadata` keys. The recipe output reports duration percentiles, custom metric aggregates, peak memory, runtime artifacts, and the parsed `benchResults` object in JSON output when a single `wordpress.bench` step runs.
+Each workload file returns a callable. The callable may return numeric metrics directly or a payload with `metrics` and `metadata` keys. The recipe output reports duration percentiles, custom metric aggregates, peak memory, runtime artifacts, and the parsed `benchResults` object in JSON output when a single `wordpress.bench` step runs. If earlier `wordpress.browser-probe` steps in the same recipe captured generic `performance` or `memory` artifacts, `wordpress.bench` promotes selected numeric browser values into each scenario's metrics using `browser_*` names, while the raw browser artifacts remain available under `files/browser/`.
 
 ### `agent-runtime-probe`
 

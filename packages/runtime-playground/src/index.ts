@@ -567,6 +567,7 @@ interface BrowserProbeArtifact {
     finalUrl: string
     htmlSnapshot: boolean
     memory?: BrowserProbeMemorySummary
+    metrics?: Record<string, number>
     networkEvents: number
     performance?: BrowserProbePerformanceSummary
     replayability: BrowserProbeReplayability
@@ -1463,6 +1464,7 @@ class PlaygroundRuntime implements Runtime {
           finalUrl,
           htmlSnapshot: capture.has("html"),
           ...(memoryArtifact ? { memory: memoryArtifact.peak } : {}),
+          ...(memoryArtifact || performanceArtifact ? { metrics: browserProbeBenchMetrics(memoryArtifact, performanceArtifact) } : {}),
           networkEvents: network.length,
           ...(performanceArtifact ? { performance: performanceArtifact.peak } : {}),
           replayability: browserProbeReplayability(capture),
@@ -1900,7 +1902,7 @@ class PlaygroundRuntime implements Runtime {
     })
     assertPlaygroundResponseOk("wordpress.bench", response)
 
-    return response.text
+    return promoteBrowserMetricsToBenchResults(response.text, this.browserProbes)
   }
 
   private async runPhpunit(spec: ExecutionSpec): Promise<string> {
@@ -3158,6 +3160,68 @@ function lastNumber(values: Array<number | null | undefined>): number | null {
   }
 
   return null
+}
+
+function browserProbeBenchMetrics(memoryArtifact?: BrowserProbeMemoryArtifact, performanceArtifact?: BrowserProbePerformanceArtifact): Record<string, number> {
+  const memory = memoryArtifact?.peak
+  const performance = performanceArtifact?.final
+  return {
+    browser_peak_used_js_heap_bytes: memory?.usedJSHeapSize.peak ?? 0,
+    browser_final_used_js_heap_bytes: memory?.usedJSHeapSize.final ?? 0,
+    browser_checkpoint_count: performanceArtifact?.checkpoints.length ?? memoryArtifact?.checkpoints.length ?? 0,
+    browser_dom_node_count: performance?.dom.nodes ?? memory?.domNodes.final ?? 0,
+    browser_iframe_count: performance?.dom.iframes ?? 0,
+    browser_resource_count: performance?.resources.count ?? 0,
+    browser_transfer_size_bytes: performance?.resources.transferSizeBytes ?? 0,
+    browser_long_task_count: performance?.longTasks.count ?? 0,
+    browser_long_task_total_ms: performance?.longTasks.totalDurationMs ?? 0,
+  }
+}
+
+function promoteBrowserMetricsToBenchResults(raw: string, probes: BrowserProbeArtifact[]): string {
+  const metrics = combinedBrowserBenchMetrics(probes)
+  if (!metrics) {
+    return raw
+  }
+
+  const parsed = JSON.parse(raw) as Record<string, unknown>
+  const scenarios = Array.isArray(parsed.scenarios) ? parsed.scenarios : []
+  for (const scenario of scenarios) {
+    if (!isRecord(scenario)) {
+      continue
+    }
+
+    scenario.metrics = {
+      ...(isRecord(scenario.metrics) ? scenario.metrics : {}),
+      ...metrics,
+    }
+  }
+
+  return `${JSON.stringify(parsed, null, 2)}\n`
+}
+
+function combinedBrowserBenchMetrics(probes: BrowserProbeArtifact[]): Record<string, number> | undefined {
+  const metricSets = probes.map((probe) => probe.summary.metrics).filter((metrics): metrics is Record<string, number> => isRecord(metrics))
+  if (metricSets.length === 0) {
+    return undefined
+  }
+
+  const finalMetrics = metricSets.at(-1) ?? {}
+  return {
+    browser_peak_used_js_heap_bytes: Math.max(...metricSets.map((metrics) => metrics.browser_peak_used_js_heap_bytes ?? 0)),
+    browser_final_used_js_heap_bytes: finalMetrics.browser_final_used_js_heap_bytes ?? 0,
+    browser_checkpoint_count: sumMetric(metricSets, "browser_checkpoint_count"),
+    browser_dom_node_count: finalMetrics.browser_dom_node_count ?? 0,
+    browser_iframe_count: finalMetrics.browser_iframe_count ?? 0,
+    browser_resource_count: finalMetrics.browser_resource_count ?? 0,
+    browser_transfer_size_bytes: finalMetrics.browser_transfer_size_bytes ?? 0,
+    browser_long_task_count: sumMetric(metricSets, "browser_long_task_count"),
+    browser_long_task_total_ms: sumMetric(metricSets, "browser_long_task_total_ms"),
+  }
+}
+
+function sumMetric(metricSets: Array<Record<string, number>>, name: string): number {
+  return metricSets.reduce((total, metrics) => total + (metrics[name] ?? 0), 0)
 }
 
 function serializeBrowserResponse(response: Response): BrowserProbeNetworkRecord {
