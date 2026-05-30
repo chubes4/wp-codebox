@@ -3,7 +3,7 @@ import { copyFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "n
 import { createServer as createHttpServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http"
 import { createServer as createNetServer } from "node:net"
 import { basename, dirname, join, relative, resolve } from "node:path"
-import { RUNTIME_EPISODE_OBSERVATION_SCHEMA, RUNTIME_EPISODE_SNAPSHOT_SCHEMA, assertRuntimeCommandAllowed, browserInteractionScriptUsesEvaluate, getCommandDefinition, runtimeEpisodeDigest, validateBrowserInteractionScript, type BrowserInteractionStep, type PlaygroundRuntimeCommandId } from "@chubes4/wp-codebox-core"
+import { RUNTIME_EPISODE_OBSERVATION_SCHEMA, RUNTIME_EPISODE_SNAPSHOT_SCHEMA, assertRuntimeCommandAllowed, browserInteractionScriptUsesEvaluate, runtimeEpisodeDigest, validateBrowserInteractionScript, type BrowserInteractionStep } from "@chubes4/wp-codebox-core"
 import {
   MAX_CAPTURED_MOUNT_FILE_BYTES,
   MAX_CAPTURED_MOUNT_FILES,
@@ -20,6 +20,8 @@ import {
 } from "./artifacts.js"
 import { ArtifactBundleBuilder } from "./artifact-bundle-builder.js"
 import { playgroundBlueprint } from "./blueprint.js"
+import { executePlaygroundCommand, playgroundRuntimeCommandIds } from "./command-router.js"
+export { playgroundRuntimeCommandIds } from "./command-router.js"
 import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, CORE_PHPUNIT_RESULT_FILE, corePhpunitRunCode, isSafeEnvName, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, normalizeThemeCheckOutput, phpBody, phpunitRunCode, positiveIntegerArg, shellArgv, themeCheckRunCode, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
 import type {
   ArtifactBundle,
@@ -826,25 +828,7 @@ export class PlaygroundRuntimeBackend implements RuntimeBackend {
   }
 }
 
-export function playgroundRuntimeCommandIds(): string[] {
-  return Object.keys(PlaygroundRuntime.commandHandlers)
-}
-
 class PlaygroundRuntime implements Runtime {
-  static readonly commandHandlers = {
-    "inspect-mounted-inputs": (runtime) => runtime.inspectMountedInputs(),
-    "wordpress.run-php": (runtime, spec) => runtime.runPhp(spec),
-    "wordpress.wp-cli": (runtime, spec) => runtime.runWpCli(spec),
-    "wordpress.ability": (runtime, spec) => runtime.runAbility(spec),
-    "wordpress.bench": (runtime, spec) => runtime.runBench(spec),
-    "wordpress.phpunit": (runtime, spec) => runtime.runPhpunit(spec),
-    "wordpress.plugin-check": (runtime, spec) => runtime.runPluginCheck(spec),
-    "wordpress.core-phpunit": (runtime, spec) => runtime.runCorePhpunit(spec),
-    "wordpress.theme-check": (runtime, spec) => runtime.runThemeCheck(spec),
-    "wordpress.browser-probe": (runtime, spec) => runtime.runBrowserProbe(spec),
-    "wordpress.browser-actions": (runtime, spec) => runtime.runBrowserActions(spec),
-  } satisfies Record<PlaygroundRuntimeCommandId, (runtime: PlaygroundRuntime, spec: ExecutionSpec) => Promise<string> | string>
-
   private status: RuntimeInfo["status"] = "created"
   private readonly runtimeId = id("runtime")
   private readonly createdAt = now()
@@ -939,7 +923,7 @@ class PlaygroundRuntime implements Runtime {
         command: spec.command,
         args: spec.args ?? [],
         exitCode: 0,
-        stdout: await this.executePlaygroundCommand(spec),
+        stdout: await executePlaygroundCommand(this, spec),
         stderr: "",
         startedAt,
         finishedAt: now(),
@@ -1367,20 +1351,7 @@ class PlaygroundRuntime implements Runtime {
     )
   }
 
-  private async executePlaygroundCommand(spec: ExecutionSpec): Promise<string> {
-    const definition = getCommandDefinition(spec.command)
-    if (definition?.handler.kind === "playground") {
-      const handler = PlaygroundRuntime.commandHandlers[definition.id as PlaygroundRuntimeCommandId]
-      if (!handler) {
-        throw new Error(`No Playground command handler is registered for: ${spec.command}`)
-      }
-      return handler(this, spec)
-    }
-
-    throw new Error(`No Playground command handler is registered for: ${spec.command}`)
-  }
-
-  private async runBrowserProbe(spec: ExecutionSpec): Promise<string> {
+  async runBrowserProbe(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const urlArg = argValue(args, "url")?.trim()
@@ -1579,7 +1550,7 @@ class PlaygroundRuntime implements Runtime {
     }, null, 2)}\n`
   }
 
-  private async runBrowserActions(spec: ExecutionSpec): Promise<string> {
+  async runBrowserActions(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const steps = await this.browserInteractionStepsFromArgs(args)
@@ -1815,7 +1786,7 @@ class PlaygroundRuntime implements Runtime {
     }
   }
 
-  private async runPhp(spec: ExecutionSpec): Promise<string> {
+  async runPhp(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const code = await this.phpCodeFromArgs(spec.args ?? [])
     const bridge = argValue(spec.args ?? [], "wp-cli-bridge") === "1" ? await this.createRuntimeWpCliBridge(server) : undefined
@@ -1832,7 +1803,7 @@ class PlaygroundRuntime implements Runtime {
     return response.text
   }
 
-  private async runWpCli(spec: ExecutionSpec): Promise<string> {
+  async runWpCli(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const command = wpCliCommandFromArgs(spec.args ?? [])
     const argv = shellArgv(command)
@@ -1856,7 +1827,7 @@ class PlaygroundRuntime implements Runtime {
     return cleanWpCliOutput(response.text)
   }
 
-  private async runPluginCheck(spec: ExecutionSpec): Promise<string> {
+  async runPluginCheck(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const pluginSlug = argValue(args, "plugin-slug")?.trim()
@@ -1909,7 +1880,7 @@ class PlaygroundRuntime implements Runtime {
     return `${JSON.stringify(normalized, null, 2)}\n`
   }
 
-  private async runThemeCheck(spec: ExecutionSpec): Promise<string> {
+  async runThemeCheck(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const theme = argValue(args, "theme")?.trim()
@@ -2016,7 +1987,7 @@ class PlaygroundRuntime implements Runtime {
     }
   }
 
-  private async runAbility(spec: ExecutionSpec): Promise<string> {
+  async runAbility(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const name = argValue(spec.args ?? [], "name")?.trim()
     if (!name) {
@@ -2029,7 +2000,7 @@ class PlaygroundRuntime implements Runtime {
     return response.text
   }
 
-  private async runBench(spec: ExecutionSpec): Promise<string> {
+  async runBench(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const pluginSlug = argValue(args, "plugin-slug")?.trim()
@@ -2051,7 +2022,7 @@ class PlaygroundRuntime implements Runtime {
     return promoteBrowserMetricsToBenchResults(response.text, this.browserProbes)
   }
 
-  private async runPhpunit(spec: ExecutionSpec): Promise<string> {
+  async runPhpunit(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const explicitCode = argValue(args, "code") || argValue(args, "code-file")
@@ -2078,7 +2049,7 @@ class PlaygroundRuntime implements Runtime {
     return response.text
   }
 
-  private async runCorePhpunit(spec: ExecutionSpec): Promise<string> {
+  async runCorePhpunit(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
     const args = spec.args ?? []
     const explicitCode = argValue(args, "code") || argValue(args, "code-file")
@@ -2314,7 +2285,7 @@ ${phpBody(code)}`
     throw new Error(`${command} requires code=<php> or code-file=<path>`)
   }
 
-  private async inspectMountedInputs(): Promise<string> {
+  async inspectMountedInputs(): Promise<string> {
     const server = await this.bootPlayground()
     const response = await server.playground.run({
       code: `<?php
