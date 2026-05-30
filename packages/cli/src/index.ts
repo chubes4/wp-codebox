@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, commandRegistry, createRuntime, createWorkspaceRecipeJsonSchema, recipeCommandDefinitions, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type CommandDefinition, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeJsonSchema, type WorkspaceRecipePluginRuntime, type WorkspaceRecipePluginRuntimeHealthProbe, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
+import { SANDBOX_DMC_PARENT_ONLY_ABILITIES, SANDBOX_DMC_SAFE_ABILITIES, SANDBOX_WORKSPACE_ROOT, calculateArtifactManifestFileSha256, checkWorkspacePolicy, commandRegistry, createRuntime, createWorkspaceRecipeJsonSchema, recipeCommandDefinitions, validateBrowserInteractionScript, validateRuntimePolicy, verifyArtifactBundle, type ArtifactBundle, type ArtifactBundleVerificationResult, type ArtifactManifest, type CommandDefinition, type ExecutionResult, type MountSpec, type Runtime, type RuntimeInfo, type RuntimePolicy, type SandboxWorkspaceContract, type SandboxWorkspaceMode, type WorkspacePolicyResult, type WorkspaceRecipe, type WorkspaceRecipeExtraPlugin, type WorkspaceRecipeJsonSchema, type WorkspaceRecipePluginRuntime, type WorkspaceRecipePluginRuntimeHealthProbe, type WorkspaceRecipeSiteSeed, type WorkspaceRecipeStagedFile, type WorkspaceRecipeWorkspace } from "@chubes4/wp-codebox-core"
 import { createPlaygroundRuntimeBackend } from "@chubes4/wp-codebox-playground"
 import { agentRuntimeProbeCode, agentSandboxRunCode, resolveSandboxTaskCode } from "./agent-code.js"
 import { captureStdout, printArtifactVerifyHumanOutput, printBatchHumanOutput, printBlueprintValidateHumanOutput, printBootHumanOutput, printCommandCatalogHumanOutput, printHelp, printHumanOutput, printRecipeHumanOutput, printRecipeSchemaHumanOutput, printRecipeValidateHumanOutput, serializeError } from "./output.js"
@@ -3647,6 +3647,48 @@ async function validateRecipeStepArgs(step: WorkspaceRecipe["workflow"]["steps"]
     return
   }
 
+  if (step.command === "wordpress.browser-actions") {
+    const stepsJson = recipeStepArgValue(step.args ?? [], "steps-json")
+    const actionsJson = recipeStepArgValue(step.args ?? [], "actions-json")
+    const url = recipeStepArgValue(step.args ?? [], "url")?.trim()
+    if (!stepsJson && !actionsJson && !url) {
+      addIssue("missing-steps", `${path}.args`, "wordpress.browser-actions requires steps-json=<array> (or actions-json=<array>) or url=<path-or-url>.")
+    }
+
+    if (stepsJson && !stepsJson.startsWith("@")) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(stepsJson)
+      } catch (error) {
+        addIssue("invalid-steps-json", `${path}.args`, `wordpress.browser-actions steps-json must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+        parsed = undefined
+      }
+      if (parsed !== undefined) {
+        const result = validateBrowserInteractionScript(parsed)
+        for (const issue of result.issues) {
+          addIssue("invalid-step", `${path}.args`, `wordpress.browser-actions steps-json[${issue.index}]: ${issue.message}`)
+        }
+      }
+    }
+
+    for (const name of ["step-timeout", "timeout"] as const) {
+      const value = recipeStepArgValue(step.args ?? [], name)
+      if (value && !/^(\d+(?:\.\d+)?)(ms|s)$/.test(value)) {
+        addIssue("invalid-duration", `${path}.args`, `wordpress.browser-actions ${name} must look like 500ms or 2s.`)
+      }
+    }
+
+    const capture = recipeStepArgValue(step.args ?? [], "capture")
+    if (capture) {
+      for (const item of capture.split(",").map((value) => value.trim()).filter(Boolean)) {
+        if (!["steps", "actions", "console", "errors", "html", "network", "screenshot"].includes(item)) {
+          addIssue("invalid-capture", `${path}.args`, `wordpress.browser-actions capture does not support: ${item}`)
+        }
+      }
+    }
+    return
+  }
+
   if (step.command === "wordpress.ability") {
     if (!recipeStepArgValue(step.args ?? [], "name")?.trim()) {
       addIssue("missing-ability-name", `${path}.args`, "wordpress.ability requires name=<ability-name>.")
@@ -3949,10 +3991,29 @@ function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
   if ((recipe.inputs?.siteSeeds ?? []).some((siteSeed) => siteSeed.type === "fixture")) {
     commands.unshift("wordpress.run-php")
   }
+  // Auto-grant the evaluate capability when a browser-actions step opts into the
+  // arbitrary-JS escape hatch by including an evaluate step. Recipe authors opt in
+  // by writing the step; direct `run` invocations still control the gate via --policy.
+  if (recipeWorkflowSteps(recipe).some(({ step }) => step.command === "wordpress.browser-actions" && recipeStepUsesEvaluate(step))) {
+    commands.push("wordpress.browser-actions.evaluate")
+  }
 
   return {
     ...defaultPolicy,
     commands: [...new Set(commands)],
+  }
+}
+
+function recipeStepUsesEvaluate(step: WorkspaceRecipe["workflow"]["steps"][number]): boolean {
+  const raw = recipeStepArgValue(step.args ?? [], "steps-json")
+  if (!raw || raw.startsWith("@")) {
+    return false
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) && parsed.some((entry) => entry && typeof entry === "object" && (entry as { kind?: unknown }).kind === "evaluate")
+  } catch {
+    return false
   }
 }
 

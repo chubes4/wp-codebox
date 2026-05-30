@@ -54,6 +54,7 @@
     "recipe-browser-smoke": "tsx scripts/recipe-browser-smoke.ts",
     "browser-probe-artifact-smoke": "tsx scripts/browser-probe-artifact-smoke.ts",
     "browser-actions-artifact-smoke": "tsx scripts/browser-actions-artifact-smoke.ts",
+    "browser-interaction-script-validation-smoke": "tsx scripts/browser-interaction-script-validation-smoke.ts",
     "preview-port-smoke": "tsx scripts/preview-port-smoke.ts",
     "preview-options-contract-smoke": "tsx scripts/preview-options-contract-smoke.ts",
     "preview-public-url-canonical-smoke": "tsx scripts/preview-public-url-canonical-smoke.ts",

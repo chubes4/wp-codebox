@@ -22,6 +22,11 @@ add_action('wp_footer', function () {
 });
 `)
 
+// Exercise the full interaction-script contract: an ordered multi-step script that
+// drives the UI (fill + click), waits, asserts browser behavior (expect + evaluate
+// with a deep-equal assert), and captures a named screenshot. evaluate is the
+// policy-gated escape hatch — the recipe auto-grants wordpress.browser-actions.evaluate
+// because the script includes an evaluate step.
 await writeFile(recipePath, `${JSON.stringify({
   schema: "wp-codebox/workspace-recipe/v1",
   inputs: {
@@ -38,13 +43,17 @@ await writeFile(recipePath, `${JSON.stringify({
       {
         command: "wordpress.browser-actions",
         args: [
-          `actions-json=${JSON.stringify([
-            { type: "navigate", url: "/", waitFor: "load" },
-            { type: "fill", selector: "#wp-codebox-name", value: "Runtime" },
-            { type: "click", selector: "#wp-codebox-button" },
-            { type: "wait", selector: '#wp-codebox-result[data-state="done"]' },
+          "url=/",
+          `steps-json=${JSON.stringify([
+            { kind: "waitFor", selector: "#wp-codebox-button" },
+            { kind: "fill", selector: "#wp-codebox-name", value: "Runtime" },
+            { kind: "click", selector: "#wp-codebox-button" },
+            { kind: "waitFor", selector: '#wp-codebox-result[data-state="done"]' },
+            { kind: "expect", selector: "#wp-codebox-result", state: "visible" },
+            { kind: "evaluate", expression: "document.getElementById('wp-codebox-result').dataset.state", assert: "done" },
+            { kind: "screenshot", name: "after-apply" },
           ])}`,
-          "capture=actions,console,errors,html,network,screenshot",
+          "capture=steps,console,errors,html,network,screenshot",
         ],
       },
     ],
@@ -66,52 +75,69 @@ assert.equal(output.success, true, output.error?.message ?? "recipe-run failed")
 assert.ok(output.artifacts?.directory, "recipe-run should return an artifact directory")
 
 const artifactDirectory = output.artifacts.directory
-const actionsPath = join(artifactDirectory, "files", "browser", "actions.jsonl")
+const stepsPath = join(artifactDirectory, "files", "browser", "steps.jsonl")
 const consolePath = join(artifactDirectory, "files", "browser", "console.jsonl")
 const htmlPath = join(artifactDirectory, "files", "browser", "snapshot.html")
 const summaryPath = join(artifactDirectory, "files", "browser", "action-summary.json")
+const namedScreenshotPath = join(artifactDirectory, "files", "browser", "screenshot-after-apply.png")
 const manifestPath = join(artifactDirectory, "manifest.json")
 const reviewPath = join(artifactDirectory, "files", "review.json")
 
-assert.equal(existsSync(actionsPath), true, "actions.jsonl should be captured")
+assert.equal(existsSync(stepsPath), true, "steps.jsonl should be captured")
 assert.equal(existsSync(consolePath), true, "console.jsonl should be captured")
 assert.equal(existsSync(htmlPath), true, "snapshot.html should be captured")
 assert.equal(existsSync(summaryPath), true, "action-summary.json should be captured")
+assert.equal(existsSync(namedScreenshotPath), true, "named screenshot should be captured")
 
-const actionLog = await readFile(actionsPath, "utf8")
+const stepsLog = await readFile(stepsPath, "utf8")
 const consoleLog = await readFile(consolePath, "utf8")
 const htmlSnapshot = await readFile(htmlPath, "utf8")
-assert.match(actionLog, /"type":"navigate"/)
-assert.match(actionLog, /"type":"fill"/)
-assert.match(actionLog, /"type":"click"/)
-assert.match(actionLog, /"type":"wait"/)
+assert.match(stepsLog, /"kind":"fill"/)
+assert.match(stepsLog, /"kind":"click"/)
+assert.match(stepsLog, /"kind":"expect"/)
+assert.match(stepsLog, /"kind":"evaluate"/)
+assert.match(stepsLog, /"kind":"screenshot"/)
+assert.match(stepsLog, /"durationMs":/)
 assert.match(consoleLog, /wp-codebox browser action completed/)
 assert.match(htmlSnapshot, /Hello Runtime/)
 
 const summary = JSON.parse(await readFile(summaryPath, "utf8")) as {
   schema: string
   finalUrl: string
-  files: { actions?: string; html?: string; screenshot?: string; summary: string }
-  summary: { actions: number; replayability: string; htmlSnapshot: boolean }
+  files: { steps?: string; html?: string; screenshot?: string; summary: string }
+  assertions?: { total: number; passed: number; failed: number; results: Array<{ kind: string; passed: boolean }> }
+  summary: { steps: number; actions: number; replayability: string; htmlSnapshot: boolean; assertions?: { total: number; passed: number; failed: number } }
 }
 assert.equal(summary.schema, "wp-codebox/browser-actions/v1")
 assert.equal(summary.finalUrl.endsWith("/"), true, "summary should include final URL")
-assert.equal(summary.files.actions, "files/browser/actions.jsonl")
+assert.equal(summary.files.steps, "files/browser/steps.jsonl")
 assert.equal(summary.files.html, "files/browser/snapshot.html")
 assert.equal(summary.files.summary, "files/browser/action-summary.json")
-assert.equal(summary.summary.actions, 4)
+assert.equal(summary.summary.steps, 8)
 assert.equal(summary.summary.replayability, "artifact-backed")
 assert.equal(summary.summary.htmlSnapshot, true)
 
+// Machine-readable assertions: an expect + an evaluate(assert), both passing.
+assert.ok(summary.assertions, "summary should include an assertions block")
+assert.equal(summary.assertions.total, 2)
+assert.equal(summary.assertions.passed, 2)
+assert.equal(summary.assertions.failed, 0)
+assert.ok(summary.assertions.results.some((result) => result.kind === "expect" && result.passed))
+assert.ok(summary.assertions.results.some((result) => result.kind === "evaluate" && result.passed))
+assert.equal(summary.summary.assertions?.total, 2)
+assert.equal(summary.summary.assertions?.passed, 2)
+
 const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { files: Array<{ path: string; kind: string }> }
-assert.ok(manifest.files.some((file) => file.path === "files/browser/actions.jsonl" && file.kind === "browser-actions"))
+assert.ok(manifest.files.some((file) => file.path === "files/browser/steps.jsonl" && file.kind === "browser-steps"))
 assert.ok(manifest.files.some((file) => file.path === "files/browser/action-summary.json" && file.kind === "browser-summary"))
 
-const review = JSON.parse(await readFile(reviewPath, "utf8")) as { browser?: { probes?: Array<{ actions?: string; actionCount?: number; html?: string; summaryFile?: string }> } }
-assert.equal(review.browser?.probes?.[0]?.actions, "files/browser/actions.jsonl")
-assert.equal(review.browser?.probes?.[0]?.actionCount, 4)
+const review = JSON.parse(await readFile(reviewPath, "utf8")) as { browser?: { probes?: Array<{ steps?: string; stepCount?: number; html?: string; summaryFile?: string; assertions?: { total: number; passed: number; failed: number } }> } }
+assert.equal(review.browser?.probes?.[0]?.steps, "files/browser/steps.jsonl")
+assert.equal(review.browser?.probes?.[0]?.stepCount, 8)
 assert.equal(review.browser?.probes?.[0]?.html, "files/browser/snapshot.html")
 assert.equal(review.browser?.probes?.[0]?.summaryFile, "files/browser/action-summary.json")
+assert.equal(review.browser?.probes?.[0]?.assertions?.total, 2)
+assert.equal(review.browser?.probes?.[0]?.assertions?.passed, 2)
 
 console.log(`Browser actions artifact smoke passed: ${artifactDirectory}`)
 

@@ -28,6 +28,7 @@ interface RecipeSchemaOutput {
   jsonSchema: Record<string, unknown>
 }
 
+// Recipe-eligible commands (recipe: true) feed the recipe JSON schema factory.
 const expectedCommandIds = [
   "inspect-mounted-inputs",
   "wordpress.run-php",
@@ -40,6 +41,25 @@ const expectedCommandIds = [
   "wordpress.theme-check",
   "wordpress.browser-probe",
   "wordpress.browser-actions",
+  "wp-codebox.agent-runtime-probe",
+  "wp-codebox.agent-sandbox-run",
+]
+
+// Full command catalog (every registered command, including policy-only capabilities
+// such as wordpress.browser-actions.evaluate which is not a recipe step).
+const expectedCatalogCommandIds = [
+  "inspect-mounted-inputs",
+  "wordpress.run-php",
+  "wordpress.wp-cli",
+  "wordpress.ability",
+  "wordpress.bench",
+  "wordpress.phpunit",
+  "wordpress.plugin-check",
+  "wordpress.core-phpunit",
+  "wordpress.theme-check",
+  "wordpress.browser-probe",
+  "wordpress.browser-actions",
+  "wordpress.browser-actions.evaluate",
   "wp-codebox.agent-runtime-probe",
   "wp-codebox.agent-sandbox-run",
 ]
@@ -92,7 +112,7 @@ function assert(condition: unknown, message: string): asserts condition {
 async function main(): Promise<void> {
   const catalog = await cliJson<CommandCatalogOutput>(["commands", "--json"])
   assert(catalog.schema === "wp-codebox/command-catalog/v1", "Unexpected command catalog schema")
-  assert(JSON.stringify(catalog.commands.map((command) => command.id)) === JSON.stringify(expectedCommandIds), "Command ids changed unexpectedly")
+  assert(JSON.stringify(catalog.commands.map((command) => command.id)) === JSON.stringify(expectedCatalogCommandIds), "Command ids changed unexpectedly")
 
   for (const command of catalog.commands) {
     assert(command.description.length > 0, `${command.id} is missing description`)

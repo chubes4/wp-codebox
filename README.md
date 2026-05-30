@@ -462,7 +462,7 @@ Supported runtime commands today:
 - `wordpress.wp-cli`: run WP-CLI; accepts `command='wp option get home'` or plain args.
 - `wordpress.ability`: execute a registered WordPress Ability; accepts `name=<ability>` and optional JSON `input=<object>`.
 - `wordpress.browser-probe`: boot the live preview, visit `url=<path-or-url>` with Playwright, and capture generic browser replay/audit evidence under `files/browser/`.
-- `wordpress.browser-actions`: boot the live preview, run generic browser interactions, and capture replay/audit evidence under `files/browser/`.
+- `wordpress.browser-actions`: boot the live preview, drive it with an ordered interaction script (`steps-json`), assert browser behavior, and capture replay/audit evidence under `files/browser/`.
 
 `wordpress.run-php` loads `/wordpress/wp-load.php` by default. Use `--arg bootstrap=none` for raw PHP.
 
@@ -470,7 +470,26 @@ Supported runtime commands today:
 
 `wordpress.browser-probe` accepts `wait-for=domcontentloaded|load|networkidle|selector:<selector>|duration`, `duration=<n>s`, and `capture=console,errors,html,network,performance,memory,screenshot`. It records machine-readable evidence refs such as `files/browser/console.jsonl`, `files/browser/errors.jsonl`, `files/browser/network.jsonl`, `files/browser/performance.json`, `files/browser/memory.json`, `files/browser/checkpoints.jsonl`, `files/browser/snapshot.html`, `files/browser/screenshot.png`, and `files/browser/summary.json` when those captures are enabled. The summary includes requested/final URLs, viewport/device metadata, HTML and screenshot hashes, network event counts, optional final/peak browser memory and performance summaries, and a generic `artifact-backed|partial|diagnostic-only` replayability classification. Performance and memory captures use generic browser/CDP data only: JS heap when available, CDP `Performance.getMetrics`, CDP DOM counters, DOM/resource counts and byte totals, and long task counts/duration. Probe scripts may call `window.__wpCodeboxProbeCheckpoint(name, metadata)` when `performance` or `memory` capture is enabled to record named generic checkpoint snapshots. WP Codebox intentionally keeps these browser evidence fields generic; consumers such as eval harnesses may interpret them without WP Codebox adding scoring, grading, or benchmark semantics.
 
-`wordpress.browser-actions` accepts `actions-json=<array>` with ordered `navigate`, `click`, `fill`, `press`, `wait`, and `capture` actions. `navigate` uses `url` plus optional `waitFor=domcontentloaded|load|networkidle`; `click` uses `selector` or `text`; `fill` uses `selector` and `value`; `press` uses `key` plus optional `selector`; `wait` uses `selector` or `waitFor=domcontentloaded|load|networkidle|duration` with `duration=<n>s|<n>ms`. It records `files/browser/actions.jsonl`, `files/browser/action-summary.json`, and optional `console`, `errors`, `network`, `html`, and `screenshot` captures. Failures identify the failed action index/type in the action log, include serialized browser errors, and still write the requested audit artifacts when possible.
+`wordpress.browser-actions` drives the preview with an ordered interaction script so Codebox can prove a plugin still *works* under interaction, not just that it renders. Pass the script as `steps-json=<array>` (inline JSON, or `@<path>` to read it from a file); the legacy `actions-json=<array>` shape is still accepted and normalized to steps. Each step is a thin, stable mapping over a Playwright locator action — this is not a test-runner DSL.
+
+Step kinds: `navigate` (`url`, optional `waitFor=domcontentloaded|load|networkidle`), `click`/`hover` (`selector` or `text`), `fill`/`type` (`selector`, `value`), `press` (`key`, optional `selector`), `drag` (`from` selector, `to` as `{ "selector": ... }` or `{ "x": n, "y": n }`), `select` (`selector`, `value` or `values`), `waitFor` (`selector` or `waitFor=domcontentloaded|load|networkidle|duration|selector:<sel>`), `evaluate` (`expression`, optional `assert` to deep-equal the result), `expect` (`selector`, optional `state=visible|hidden|attached|detached|enabled|disabled|checked|unchecked|editable`), and `screenshot` (optional `name` for a named capture). Every step may set its own `timeout=<n>s`; the command also accepts a global `step-timeout=<n>s` (per step) and `timeout=<n>s` (total-script budget). Both are bounded and deterministic — the run stops cleanly on the first failing step, with no silent partial success.
+
+The arbitrary-JS `evaluate` step is policy-gated **separately** from the non-JS interaction steps: a script containing `evaluate` requires `wordpress.browser-actions.evaluate` in the runtime policy in addition to `wordpress.browser-actions`. Click/fill/drag/expect and friends never require the extra grant, so a consumer can allow UI driving while still forbidding arbitrary page JS.
+
+It records `files/browser/steps.jsonl` (per-step index, kind, selector, ok/fail, timing, and any named screenshot), `files/browser/action-summary.json` (with a machine-readable `assertions` block of `total`/`passed`/`failed` plus each `expect`/`evaluate` result), named `files/browser/screenshot-<name>.png` captures, and optional `console`, `errors`, `network`, `html`, and `screenshot` artifacts (capture defaults to `steps,console,errors,network,html,screenshot`; `actions` is accepted as an alias for `steps`). Failures identify the failed step index/kind in `steps.jsonl`, include serialized browser errors, and still write the requested audit artifacts when possible. Existing navigate-only invocations (just `url=`, no `steps-json`) behave exactly as before.
+
+```jsonc
+// steps-json: open the editor, drive the crop modal, assert it still works, capture it
+[
+  { "kind": "click",      "selector": "role=button[name='Social']" },
+  { "kind": "waitFor",    "selector": ".reactEasyCrop_Container" },
+  { "kind": "drag",       "from": ".reactEasyCrop_CropArea", "to": { "x": 40, "y": 40 } },
+  { "kind": "fill",       "selector": "#caption", "value": "smoke test" },
+  { "kind": "evaluate",   "expression": "document.querySelector('.crop').isConnected", "assert": true },
+  { "kind": "expect",     "selector": ".crop-confirm", "state": "visible" },
+  { "kind": "screenshot", "name": "after-crop" }
+]
+```
 
 WP Codebox defaults to WordPress `7.0` because the agent and AI plugin stacks need the modern WordPress AI surface. Override with `--wp trunk`, `--wp nightly`, or another supported Playground version.
 
