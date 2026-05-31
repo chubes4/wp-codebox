@@ -1,20 +1,10 @@
 import { createHash } from "node:crypto"
-import { copyFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
-import { basename, dirname, join, relative, resolve } from "node:path"
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { dirname, join, relative, resolve } from "node:path"
 import { RUNTIME_EPISODE_OBSERVATION_SCHEMA, RUNTIME_EPISODE_SNAPSHOT_SCHEMA, assertRuntimeCommandAllowed, browserInteractionScriptUsesEvaluate, runtimeEpisodeDigest, type BrowserInteractionStep } from "@chubes4/wp-codebox-core"
 import {
-  MAX_CAPTURED_MOUNT_FILE_BYTES,
-  MAX_CAPTURED_MOUNT_FILES,
-  SKIPPED_CAPTURE_DIRECTORIES,
   ArtifactRedactor,
-  directoryDiff,
   fileEntry,
-  isReplayableText,
-  mountTargetPath,
-  type CapturedMountFiles,
-  type ChangedFile,
-  type MountDiff,
-  type MountDiffsResult,
 } from "./artifacts.js"
 import { ArtifactBundleBuilder } from "./artifact-bundle-builder.js"
 import { browserInteractionStepsFromArgs } from "./browser-actions.js"
@@ -26,6 +16,7 @@ import { executePlaygroundCommand, playgroundRuntimeCommandIds } from "./command
 export { playgroundRuntimeCommandIds } from "./command-router.js"
 import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, CORE_PHPUNIT_RESULT_FILE, corePhpunitRunCode, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, normalizeThemeCheckOutput, phpunitRunCode, positiveIntegerArg, shellArgv, themeCheckRunCode, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
 import { bootstrapAbilityPhpCode, bootstrapPhpCode, phpCodeFromArgs } from "./php-bootstrap.js"
+import { captureMountedFiles, captureMountDiffs } from "./mounted-artifact-capture.js"
 import { PlaygroundCommandCrashError, assertPlaygroundResponseOk, errorMessage, type PlaygroundRunResponse } from "./playground-command-errors.js"
 import { startPlaygroundCliServer } from "./playground-cli-runner.js"
 import type { PlaygroundCliServer } from "./preview-server.js"
@@ -385,8 +376,8 @@ class PlaygroundRuntime implements Runtime {
       info: () => this.info(),
       previewInfo: (createdAt, previewHoldSeconds) => this.previewInfo(createdAt, previewHoldSeconds),
       browserReviewSummary: () => this.browserReviewSummary(),
-      captureMountedFiles: (filesDirectory, redactor) => this.captureMountedFiles(filesDirectory, redactor),
-      captureMountDiffs: (filesDirectory, redactor) => this.captureMountDiffs(filesDirectory, redactor),
+      captureMountedFiles: (filesDirectory, redactor) => captureMountedFiles(filesDirectory, this.mounts, redactor),
+      captureMountDiffs: (filesDirectory, redactor) => captureMountDiffs(this.artifactRoot, filesDirectory, this.mounts, redactor),
       redactBrowserArtifacts: (redactor) => this.redactBrowserArtifacts(redactor),
       redactPluginCheckArtifacts: (redactor) => this.redactPluginCheckArtifacts(redactor),
       redactThemeCheckArtifacts: (redactor) => this.redactThemeCheckArtifacts(redactor),
@@ -405,170 +396,6 @@ class PlaygroundRuntime implements Runtime {
         spec: artifactSpec,
       }),
     }).build(spec)
-  }
-
-  private async captureMountedFiles(filesDirectory: string, redactor: ArtifactRedactor): Promise<CapturedMountFiles> {
-    const captured: CapturedMountFiles = {
-      files: [],
-      skipped: [],
-      limits: {
-        maxFiles: MAX_CAPTURED_MOUNT_FILES,
-        maxFileBytes: MAX_CAPTURED_MOUNT_FILE_BYTES,
-        skippedDirectories: [...SKIPPED_CAPTURE_DIRECTORIES].sort(),
-      },
-    }
-
-    for (const [mountIndex, mount] of this.mounts.entries()) {
-      if (mount.mode !== "readwrite") {
-        continue
-      }
-
-      const mountStats = await stat(mount.source)
-      if (mountStats.isDirectory()) {
-        await this.captureMountedDirectory(filesDirectory, captured, mount, mountIndex, mount.source, "", redactor)
-        continue
-      }
-
-      if (mountStats.isFile()) {
-        await this.captureMountedFile(filesDirectory, captured, mount, mountIndex, mount.source, basename(mount.source), redactor)
-      }
-    }
-
-    return captured
-  }
-
-  private async captureMountDiffs(filesDirectory: string, redactor: ArtifactRedactor): Promise<MountDiffsResult> {
-    const diffsDirectory = join(filesDirectory, "diffs")
-    await mkdir(diffsDirectory, { recursive: true })
-    const diffs: MountDiff[] = []
-    const changedFiles: ChangedFile[] = []
-    const patches: string[] = []
-
-    for (const [mountIndex, mount] of this.mounts.entries()) {
-      const baselineSource = typeof mount.metadata?.baselineSource === "string" ? mount.metadata.baselineSource : ""
-      if (mount.mode !== "readwrite" || !baselineSource) {
-        continue
-      }
-
-      const diff = await directoryDiff(baselineSource, mount.source, mount.target)
-      const artifactPath = `files/diffs/mount-${mountIndex}.patch`
-      await writeFile(join(this.artifactRoot, artifactPath), redactor.redact(artifactPath, diff.patch))
-      diffs.push({
-        mountIndex,
-        source: mount.source,
-        target: mount.target,
-        baselineSource,
-        artifactPath,
-        changed: diff.patch.trim().length > 0,
-      })
-      patches.push(diff.patch)
-      changedFiles.push(
-        ...diff.files.map((file) => ({
-          ...file,
-          mountIndex,
-          mountTarget: mount.target,
-          patchPath: artifactPath,
-        })),
-      )
-    }
-
-    return {
-      mountDiffs: diffs,
-      changedFiles: {
-        schema: "wp-codebox/changed-files/v1",
-        files: changedFiles,
-      },
-      patch: patches.filter((patch) => patch.length > 0).join("\n"),
-    }
-  }
-
-  private async captureMountedDirectory(
-    filesDirectory: string,
-    captured: CapturedMountFiles,
-    mount: MountSpec,
-    mountIndex: number,
-    directory: string,
-    relativeDirectory: string,
-    redactor: ArtifactRedactor,
-  ): Promise<void> {
-    const entries = await readdir(directory, { withFileTypes: true })
-
-    for (const entry of entries) {
-      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-      const sourcePath = join(directory, entry.name)
-
-      if (entry.isDirectory()) {
-        if (SKIPPED_CAPTURE_DIRECTORIES.has(entry.name)) {
-          captured.skipped.push({
-            mountIndex,
-            source: sourcePath,
-            target: mountTargetPath(mount, relativePath),
-            relativePath,
-            reason: "directory-skipped",
-          })
-          continue
-        }
-
-        await this.captureMountedDirectory(filesDirectory, captured, mount, mountIndex, sourcePath, relativePath, redactor)
-        continue
-      }
-
-      if (entry.isFile()) {
-        await this.captureMountedFile(filesDirectory, captured, mount, mountIndex, sourcePath, relativePath, redactor)
-      }
-    }
-  }
-
-  private async captureMountedFile(
-    filesDirectory: string,
-    captured: CapturedMountFiles,
-    mount: MountSpec,
-    mountIndex: number,
-    sourcePath: string,
-    relativePath: string,
-    redactor: ArtifactRedactor,
-  ): Promise<void> {
-    const target = mount.type === "file" ? mount.target : mountTargetPath(mount, relativePath)
-
-    if (captured.files.length >= MAX_CAPTURED_MOUNT_FILES) {
-      captured.skipped.push({ mountIndex, source: sourcePath, target, relativePath, reason: "max-files-exceeded" })
-      return
-    }
-
-    const fileStats = await stat(sourcePath)
-    if (fileStats.size > MAX_CAPTURED_MOUNT_FILE_BYTES) {
-      captured.skipped.push({ mountIndex, source: sourcePath, target, relativePath, reason: "max-file-bytes-exceeded" })
-      return
-    }
-
-    const artifactRelativePath = `mounts/${mountIndex}/${relativePath}`
-    const artifactPath = join(filesDirectory, artifactRelativePath)
-    await mkdir(dirname(artifactPath), { recursive: true })
-
-    const buffer = await readFile(sourcePath)
-    const text = buffer.toString("utf8")
-    const replayable = isReplayableText(buffer, text)
-    const artifactBundlePath = `files/${artifactRelativePath}`
-    const artifactContents = replayable ? redactor.redact(artifactBundlePath, text) : buffer
-    if (typeof artifactContents === "string") {
-      await writeFile(artifactPath, artifactContents)
-    } else {
-      await copyFile(sourcePath, artifactPath)
-    }
-    const artifactBuffer = typeof artifactContents === "string" ? Buffer.from(artifactContents, "utf8") : buffer
-
-    captured.files.push({
-      mountIndex,
-      source: sourcePath,
-      target,
-      relativePath,
-      artifactPath: artifactBundlePath,
-      size: artifactBuffer.byteLength,
-      sha256: createHash("sha256").update(artifactBuffer).digest("hex"),
-      contentType: replayable ? "text/plain; charset=utf-8" : "application/octet-stream",
-      replayable,
-      ...(replayable ? { replayContents: artifactContents as string } : {}),
-    })
   }
 
   async destroy(): Promise<void> {
