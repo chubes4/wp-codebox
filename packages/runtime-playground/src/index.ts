@@ -24,7 +24,8 @@ import { BROWSER_PROBE_CAPTURE_VALUES, BROWSER_PROBE_PERFORMANCE_INIT_SCRIPT, br
 import { browserProbeBenchMetrics, jsonLines, promoteBrowserMetricsToBenchResults, serializeBrowserConsoleMessage, serializeBrowserError, serializeBrowserFinishedRequest, serializeBrowserRequestFailure } from "./browser-metrics.js"
 import { executePlaygroundCommand, playgroundRuntimeCommandIds } from "./command-router.js"
 export { playgroundRuntimeCommandIds } from "./command-router.js"
-import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, CORE_PHPUNIT_RESULT_FILE, corePhpunitRunCode, isSafeEnvName, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, normalizeThemeCheckOutput, phpBody, phpunitRunCode, positiveIntegerArg, shellArgv, themeCheckRunCode, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
+import { abilityInputFromArgs, abilityPhpCode, argValue, benchRunCode, booleanArg, cleanWpCliOutput, commaListArg, CORE_PHPUNIT_RESULT_FILE, corePhpunitRunCode, jsonArrayArg, jsonObjectArg, nonNegativeIntegerArg, normalizePhpCode, normalizePluginCheckOutput, normalizeThemeCheckOutput, phpunitRunCode, positiveIntegerArg, shellArgv, themeCheckRunCode, wpCliCommandFromArgs, wpCliPhpScript } from "./commands.js"
+import { bootstrapAbilityPhpCode, bootstrapPhpCode, phpCodeFromArgs } from "./php-bootstrap.js"
 import { PlaygroundCommandCrashError, assertPlaygroundResponseOk, errorMessage, extractCorePhpunitFailureMessage, type PlaygroundRunResponse } from "./playground-command-errors.js"
 import { startPlaygroundCliServer } from "./playground-cli-runner.js"
 import type { PlaygroundCliServer } from "./preview-server.js"
@@ -363,16 +364,6 @@ echo wp_json_encode( array(
 `}`
 }
 
-function phpLiteral(value: string | number | boolean | null): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value)
-  }
-  if (value === null) {
-    return "null"
-  }
-  return String(value)
-}
-
 interface PluginCheckArtifact {
   targetPlugin: string
   files: {
@@ -630,7 +621,7 @@ class PlaygroundRuntime implements Runtime {
 
   private async captureRuntimeSnapshotArtifact(snapshotId: string, createdAt: string): Promise<RuntimeSnapshotArtifact> {
     const response = await this.runPlaygroundCommand("runtime.snapshot", await this.bootPlayground(), {
-      code: this.bootstrapPhpCode(runtimeSnapshotExportPhp(), []),
+      code: bootstrapPhpCode(this.spec, runtimeSnapshotExportPhp(), []),
     })
     assertPlaygroundResponseOk("runtime.snapshot", response)
     const captured = JSON.parse(response.text || "{}") as Omit<RuntimeSnapshotArtifact, "schema" | "version" | "id" | "createdAt" | "hashes">
@@ -663,7 +654,7 @@ class PlaygroundRuntime implements Runtime {
     }
 
     const response = await this.runPlaygroundCommand("runtime.snapshot.restore", await this.bootPlayground(), {
-      code: this.bootstrapPhpCode(runtimeSnapshotRestorePhp(payload), []),
+      code: bootstrapPhpCode(this.spec, runtimeSnapshotRestorePhp(payload), []),
     })
     assertPlaygroundResponseOk("runtime.snapshot.restore", response)
   }
@@ -1361,11 +1352,11 @@ class PlaygroundRuntime implements Runtime {
 
   async runPhp(spec: ExecutionSpec): Promise<string> {
     const server = await this.bootPlayground()
-    const code = await this.phpCodeFromArgs(spec.args ?? [])
+    const code = await phpCodeFromArgs(spec.args ?? [])
     const bridge = argValue(spec.args ?? [], "wp-cli-bridge") === "1" ? await this.createRuntimeWpCliBridge(server) : undefined
     let response: PlaygroundRunResponse
     try {
-      response = await this.runPlaygroundCommand("wordpress.run-php", server, { code: this.bootstrapPhpCode(code, spec.args ?? [], bridge) })
+      response = await this.runPlaygroundCommand("wordpress.run-php", server, { code: bootstrapPhpCode(this.spec, code, spec.args ?? [], bridge) })
       assertPlaygroundResponseOk("wordpress.run-php", response)
     } finally {
       if (bridge) {
@@ -1470,7 +1461,7 @@ class PlaygroundRuntime implements Runtime {
       assertPlaygroundResponseOk("wordpress.theme-check", install)
     }
 
-    const response = await this.runPlaygroundCommand("wordpress.theme-check", server, { code: this.bootstrapPhpCode(themeCheckRunCode(theme), []) })
+    const response = await this.runPlaygroundCommand("wordpress.theme-check", server, { code: bootstrapPhpCode(this.spec, themeCheckRunCode(theme), []) })
     assertPlaygroundResponseOk("wordpress.theme-check", response)
     const raw = cleanWpCliOutput(response.text)
     const normalized = normalizeThemeCheckOutput(raw, response.exitCode ?? 0, theme)
@@ -1501,7 +1492,7 @@ class PlaygroundRuntime implements Runtime {
     }
 
     const input = abilityInputFromArgs(spec.args ?? [])
-    const response = await this.runPlaygroundCommand("wordpress.ability", server, { code: this.bootstrapAbilityPhpCode(abilityPhpCode(name, input)) })
+    const response = await this.runPlaygroundCommand("wordpress.ability", server, { code: bootstrapAbilityPhpCode(this.spec, abilityPhpCode(name, input)) })
     assertPlaygroundResponseOk("wordpress.ability", response)
     return response.text
   }
@@ -1521,7 +1512,7 @@ class PlaygroundRuntime implements Runtime {
     const env = jsonObjectArg(args, "env-json")
     const workloads = jsonArrayArg(args, "workloads-json")
     const response = await this.runPlaygroundCommand("wordpress.bench", server, {
-      code: this.bootstrapPhpCode(benchRunCode({ componentId, pluginSlug, iterations, warmupIterations, dependencySlugs, env, workloads }), []),
+      code: bootstrapPhpCode(this.spec, benchRunCode({ componentId, pluginSlug, iterations, warmupIterations, dependencySlugs, env, workloads }), []),
     })
     assertPlaygroundResponseOk("wordpress.bench", response)
 
@@ -1533,7 +1524,7 @@ class PlaygroundRuntime implements Runtime {
     const args = spec.args ?? []
     const explicitCode = argValue(args, "code") || argValue(args, "code-file")
     const pluginSlug = argValue(args, "plugin-slug")?.trim() || ""
-    const code = explicitCode ? await this.phpCodeFromArgs(args, "wordpress.phpunit") : normalizePhpCode(phpunitRunCode({
+    const code = explicitCode ? await phpCodeFromArgs(args, "wordpress.phpunit") : normalizePhpCode(phpunitRunCode({
       pluginSlug,
       autoloadFile: argValue(args, "autoload-file")?.trim() || "/wp-codebox-vendor/autoload.php",
       testsDir: argValue(args, "tests-dir")?.trim() || "/wp-codebox-vendor/wp-phpunit/wp-phpunit",
@@ -1563,7 +1554,7 @@ class PlaygroundRuntime implements Runtime {
     // the (often read-only) core mount, so the result survives read-only mounts and a
     // mid-require die() in core's bootstrap.php and can be read back from the VFS (#314).
     const resultFile = CORE_PHPUNIT_RESULT_FILE
-    const code = explicitCode ? await this.phpCodeFromArgs(args, "wordpress.core-phpunit") : normalizePhpCode(corePhpunitRunCode({
+    const code = explicitCode ? await phpCodeFromArgs(args, "wordpress.core-phpunit") : normalizePhpCode(corePhpunitRunCode({
       coreRoot: argValue(args, "core-root")?.trim() || "/wordpress",
       testsDir: argValue(args, "tests-dir")?.trim() || "/wordpress/tests/phpunit",
       phpunitXml: argValue(args, "phpunit-xml")?.trim() || "/wordpress/tests/phpunit/phpunit.xml.dist",
@@ -1714,83 +1705,6 @@ class PlaygroundRuntime implements Runtime {
     }
   }
 
-  private bootstrapAbilityPhpCode(code: string): string {
-    return `<?php
-define( 'REST_REQUEST', true );
-$_SERVER['REQUEST_URI'] = '/wp-json/wp-codebox/ability';
-require_once '/wordpress/wp-load.php';
-${this.secretEnvPhp()}
-${phpBody(code)}`
-  }
-
-  private bootstrapPhpCode(code: string, args: string[], wpCliBridge?: RuntimeWpCliBridge): string {
-    if (argValue(args, "bootstrap") === "none") {
-      return code
-    }
-
-    return `<?php
-${this.pluginRuntimeBootstrapPhp()}
-require_once '/wordpress/wp-load.php';
-${this.secretEnvPhp()}
-${wpCliBridge ? `putenv(${JSON.stringify(`HOMEBOY_TERMINAL_ACTION_URL=${wpCliBridge.url}`)});
-putenv(${JSON.stringify(`HOMEBOY_TERMINAL_ACTION_TOKEN=${wpCliBridge.token}`)});
-` : ""}
-${phpBody(code)}`
-  }
-
-  private pluginRuntimeBootstrapPhp(): string {
-    const pluginRuntime = this.spec.metadata?.recipe && typeof this.spec.metadata.recipe === "object" && !Array.isArray(this.spec.metadata.recipe)
-      ? (this.spec.metadata.recipe as { inputs?: { pluginRuntime?: unknown } }).inputs?.pluginRuntime
-      : undefined
-    if (!pluginRuntime || typeof pluginRuntime !== "object" || Array.isArray(pluginRuntime)) {
-      return ""
-    }
-
-    const runtime = pluginRuntime as { php?: { memoryLimit?: unknown; maxExecutionTime?: unknown }; wpConfigDefines?: Record<string, unknown> }
-    const lines: string[] = []
-    const memoryLimit = typeof runtime.php?.memoryLimit === "string" ? runtime.php.memoryLimit : undefined
-    if (memoryLimit && /^[0-9]+[KMG]?$/.test(memoryLimit)) {
-      lines.push(`@ini_set('memory_limit', ${JSON.stringify(memoryLimit)});`)
-    }
-    const maxExecutionTime = runtime.php?.maxExecutionTime
-    if (Number.isInteger(maxExecutionTime) && typeof maxExecutionTime === "number" && maxExecutionTime >= 0 && maxExecutionTime <= 3600) {
-      lines.push(`@set_time_limit(${maxExecutionTime});`)
-    }
-    for (const [name, value] of Object.entries(runtime.wpConfigDefines ?? {})) {
-      if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || (!["string", "number", "boolean"].includes(typeof value) && value !== null)) {
-        continue
-      }
-      lines.push(`if (!defined(${JSON.stringify(name)})) { define(${JSON.stringify(name)}, ${phpLiteral(value as string | number | boolean | null)}); }`)
-    }
-
-    return lines.length > 0 ? `${lines.join("\n")}\n` : ""
-  }
-
-  private secretEnvPhp(): string {
-    const entries = Object.entries(this.spec.secretEnv ?? {}).filter(([name]) => isSafeEnvName(name))
-    if (entries.length === 0) {
-      return ""
-    }
-
-    return `${entries
-      .map(([name, value]) => `putenv(${JSON.stringify(`${name}=${value}`)});`)
-      .join("\n")}\n`
-  }
-
-  private async phpCodeFromArgs(args: string[], command = "wordpress.run-php"): Promise<string> {
-    const inlineCode = argValue(args, "code")
-    if (inlineCode) {
-      return normalizePhpCode(inlineCode)
-    }
-
-    const codeFile = argValue(args, "code-file")
-    if (codeFile) {
-      return normalizePhpCode(await readFile(resolve(codeFile), "utf8"))
-    }
-
-    throw new Error(`${command} requires code=<php> or code-file=<path>`)
-  }
-
   async inspectMountedInputs(): Promise<string> {
     const server = await this.bootPlayground()
     const response = await server.playground.run({
@@ -1890,7 +1804,7 @@ echo json_encode(array('command' => 'inspect-mounted-inputs', 'mounts' => $inspe
       optionNames: spec.optionNames,
       userFields: spec.userFields,
     }
-    const response = await cliServer.playground.run({ code: this.bootstrapPhpCode(`
+    const response = await cliServer.playground.run({ code: bootstrapPhpCode(this.spec, `
 $config = json_decode( ${JSON.stringify(JSON.stringify(config))}, true );
 $requested_sections = isset( $config['sections'] ) && is_array( $config['sections'] ) ? array_values( array_unique( array_map( 'strval', $config['sections'] ) ) ) : array( 'summary' );
 $redaction = isset( $config['redaction'] ) ? (string) $config['redaction'] : 'safe';
