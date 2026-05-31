@@ -49,6 +49,7 @@ export interface BenchRunCodeOptions {
   dependencySlugs: string[]
   env: Record<string, unknown>
   workloads: unknown[]
+  wpCliBridge?: { url: string; token: string }
 }
 
 export interface PhpunitRunCodeOptions {
@@ -1619,6 +1620,8 @@ $warmup_iterations = max(0, (int) ${JSON.stringify(String(options.warmupIteratio
 $dependency_slugs = json_decode(${JSON.stringify(JSON.stringify(options.dependencySlugs))}, true);
 $bench_env = json_decode(${JSON.stringify(JSON.stringify(options.env))}, true);
 $configured_workloads = json_decode(${JSON.stringify(JSON.stringify(options.workloads))}, true);
+$wp_cli_bridge_url = ${JSON.stringify(options.wpCliBridge?.url ?? null)};
+$wp_cli_bridge_token = ${JSON.stringify(options.wpCliBridge?.token ?? null)};
 
 if (is_array($bench_env)) {
     foreach ($bench_env as $name => $value) {
@@ -1690,6 +1693,47 @@ function wp_codebox_bench_record_payload($payload, array &$metric_samples, ?arra
     }
 }
 
+function wp_codebox_bench_run_wp_cli_step(array $step) {
+    global $wp_cli_bridge_url, $wp_cli_bridge_token;
+    $command = isset($step['command']) && is_string($step['command']) ? trim($step['command']) : '';
+    if ($command === '') {
+        throw new RuntimeException('wp-cli bench workload steps require a command.');
+    }
+    if (!is_string($wp_cli_bridge_url) || $wp_cli_bridge_url === '' || !is_string($wp_cli_bridge_token) || $wp_cli_bridge_token === '') {
+        throw new RuntimeException('wordpress.bench wp-cli workload steps require the WP-CLI bridge.');
+    }
+
+    $parse = isset($step['parse']) && is_string($step['parse']) ? $step['parse'] : '';
+    $response = wp_remote_post($wp_cli_bridge_url . '/execute', array(
+        'headers' => array(
+            'authorization' => 'Bearer ' . $wp_cli_bridge_token,
+            'content-type' => 'application/json',
+        ),
+        'body' => wp_json_encode(array('type' => 'wp_cli', 'command' => $command), JSON_UNESCAPED_SLASHES),
+        'timeout' => 300,
+    ));
+    if (is_wp_error($response)) {
+        throw new RuntimeException('WP-CLI bench workload bridge request failed: ' . $response->get_error_message());
+    }
+    $body = wp_remote_retrieve_body($response);
+    $result = json_decode($body, true);
+    if (!is_array($result)) {
+        throw new RuntimeException('WP-CLI bench workload bridge returned invalid JSON.');
+    }
+    if (empty($result['success'])) {
+        $error = isset($result['error']) && is_string($result['error']) ? $result['error'] : 'WP-CLI command failed';
+        throw new RuntimeException('WP-CLI bench workload step failed: ' . $command . ' - ' . $error);
+    }
+    $stdout = isset($result['stdout']) ? (string) $result['stdout'] : '';
+    if ($parse === 'json' && $stdout !== '') {
+        $decoded = json_decode($stdout, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+    }
+    return $stdout;
+}
+
 $plugins_to_activate = array();
 foreach (is_array($dependency_slugs) ? $dependency_slugs : array() as $dependency_slug) {
     $dependency_slug = sanitize_key((string) $dependency_slug);
@@ -1755,11 +1799,7 @@ function wp_codebox_bench_run_configured_workload(array $workload, string $plugi
                 throw new RuntimeException($result->get_error_message());
             }
         } elseif ($type === 'wp-cli') {
-            if (!class_exists('WP_CLI')) {
-                throw new RuntimeException('WP-CLI is not loaded inside wordpress.bench yet.');
-            }
-            $command = isset($step['command']) ? (string) $step['command'] : '';
-            $result = WP_CLI::runcommand($command, array('return' => true, 'launch' => false, 'parse' => 'json'));
+            $result = wp_codebox_bench_run_wp_cli_step($step);
         } else {
             throw new RuntimeException('Unsupported bench workload step type: ' . $type);
         }

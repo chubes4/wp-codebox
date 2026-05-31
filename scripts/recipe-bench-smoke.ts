@@ -45,9 +45,14 @@ writeFileSync(recipePath, `${JSON.stringify({
           `workloads-json=${JSON.stringify([
             {
               id: "configured-env",
-              type: "php",
+              run: [
+                { type: "wp-cli", command: "wp option update wp_codebox_bench_wp_cli yes", parse: "json" },
+                {
+                  type: "php",
+                  code: "return array('metrics' => array('env_value' => (int) getenv('BENCH_FIXTURE_ENV'), 'define_visible' => defined('BENCH_FIXTURE_DEFINE') && BENCH_FIXTURE_DEFINE === 'defined-value' ? 1 : 0, 'wp_cli_option_visible' => get_option('wp_codebox_bench_wp_cli') === 'yes' ? 1 : 0), 'metadata' => array('kind' => 'configured'));",
+                },
+              ],
               artifacts: { report: { path: "workloads/report.json", kind: "json" } },
-              code: "return array('metrics' => array('env_value' => (int) getenv('BENCH_FIXTURE_ENV'), 'define_visible' => defined('BENCH_FIXTURE_DEFINE') && BENCH_FIXTURE_DEFINE === 'defined-value' ? 1 : 0), 'metadata' => array('kind' => 'configured'));",
             },
           ])}`,
         ],
@@ -88,6 +93,7 @@ assert.equal(configured.id, "configured-env")
 assert.equal(configured.source, "config")
 assert.equal(configured.metrics.env_value_mean, 13)
 assert.equal(configured.metrics.define_visible_mean, 1)
+assert.equal(configured.metrics.wp_cli_option_visible_mean, 1)
 assert.equal(configured.metadata.kind, "configured")
 assert.equal(configured.artifacts.report.path, "workloads/report.json")
 assert.ok(output.artifacts?.directory)

@@ -3985,6 +3985,9 @@ function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
   if (recipeWorkflowSteps(recipe).some(({ step }) => step.command === "wp-codebox.agent-sandbox-run")) {
     commands.unshift("wordpress.wp-cli")
   }
+  if (recipeWorkflowSteps(recipe).some(({ step }) => step.command === "wordpress.bench" && recipeBenchStepUsesWpCli(step))) {
+    commands.unshift("wordpress.wp-cli")
+  }
   if (recipeExtraPlugins(recipe).some((plugin) => plugin.activate !== false)) {
     commands.unshift("wordpress.run-php")
   }
@@ -4002,6 +4005,31 @@ function recipePolicy(recipe: WorkspaceRecipe): RuntimePolicy {
     ...defaultPolicy,
     commands: [...new Set(commands)],
   }
+}
+
+function recipeBenchStepUsesWpCli(step: WorkspaceRecipe["workflow"]["steps"][number]): boolean {
+  const workloadsArg = (step.args ?? []).find((arg) => arg.startsWith("workloads-json="))
+  if (!workloadsArg) {
+    return false
+  }
+
+  try {
+    return recipeBenchWorkloadsUseWpCli(JSON.parse(workloadsArg.slice("workloads-json=".length)))
+  } catch {
+    return false
+  }
+}
+
+function recipeBenchWorkloadsUseWpCli(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(recipeBenchWorkloadsUseWpCli)
+  }
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const record = value as { type?: unknown; run?: unknown }
+  return record.type === "wp-cli" || recipeBenchWorkloadsUseWpCli(record.run)
 }
 
 function recipeStepUsesEvaluate(step: WorkspaceRecipe["workflow"]["steps"][number]): boolean {
